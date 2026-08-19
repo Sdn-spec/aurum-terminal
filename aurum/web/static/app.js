@@ -1,8 +1,10 @@
 "use strict";
 
 const WATCHLIST_ROW_DELAY_MS = 700; // spaced out to avoid tripping Yahoo's burst rate limit
+const DONUT_COLORS = ["#D9A44E", "#34C98A", "#7C8FE8", "#E876A0", "#4FC3C9", "#E1B44A", "#8A9099"];
 
 let selectedSymbol = null;
+const lastQuoteValues = {}; // symbol -> last seen price, for flash-on-change
 
 function fmtMoney(n) {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
@@ -27,15 +29,69 @@ async function getJSON(url, opts) {
   return res.json();
 }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function loadingHtml(text) {
+  return `<span class="status-line" style="margin:0"><span class="spinner"></span>${escapeHtml(text)}</span>`;
+}
+function reducedMotion() {
+  return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+// ---- animated count-up for headline numbers --------------------------------
+
+function animateCountUp(el, endValue, { decimals = 2, prefix = "", suffix = "", duration = 900 } = {}) {
+  if (reducedMotion()) {
+    el.textContent = prefix + endValue.toFixed(decimals) + suffix;
+    return;
+  }
+  const start = 0;
+  const startTime = performance.now();
+  function tick(now) {
+    const t = Math.min(1, (now - startTime) / duration);
+    const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+    const value = start + (endValue - start) * eased;
+    el.textContent = prefix + value.toFixed(decimals) + suffix;
+    if (t < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+// ---- instrument icons (small inline SVG glyphs) -----------------------------
+
+const ICON_PATHS = {
+  bar: '<path d="M5 16 L8 8 H16 L19 16 Z"/><path d="M5 16 H19"/>',
+  drop: '<path d="M12 3C9 8 6 12 6 15a6 6 0 0 0 12 0c0-3-3-7-6-12z"/>',
+  network: '<circle cx="7" cy="7" r="1.6"/><circle cx="17" cy="7" r="1.6"/><circle cx="12" cy="17" r="1.6"/><path d="M7 7l5 10M17 7l-5 10M7 7h10"/>',
+  bars: '<path d="M5 19V11M12 19V5M19 19v-7"/>',
+  dollar: '<path d="M12 4v16M16 7.5c0-1.5-1.8-2.5-4-2.5s-4 1-4 2.8c0 3.5 8 1.7 8 5.2 0 1.8-2 2.8-4 2.8s-4-1-4-2.5"/>',
+};
+const ICON_BY_SYMBOL = {
+  GOLD: "bar", SILVER: "bar", OIL: "drop", BTC: "network", ETH: "network",
+  SPX: "bars", NASDAQ: "bars", DXY: "dollar", EURUSD: "dollar",
+};
+function iconFor(name) {
+  const key = ICON_BY_SYMBOL[name.toUpperCase()] || "bars";
+  return `<span class="sym-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[key]}</svg></span>`;
+}
 
 // ---- tabs -------------------------------------------------------------
 
+function positionTabUnderline(btn) {
+  const underline = document.getElementById("tab-underline");
+  if (!btn || !underline) return;
+  underline.style.left = btn.offsetLeft + "px";
+  underline.style.width = btn.offsetWidth + "px";
+}
 document.getElementById("tabs").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-tab]");
   if (!btn) return;
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b === btn));
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + btn.dataset.tab));
+  positionTabUnderline(btn);
 });
+window.addEventListener("resize", () => positionTabUnderline(document.querySelector("#tabs button.active")));
 
 // ---- account state ------------------------------------------------------
 
@@ -66,8 +122,8 @@ async function loadWatchlist() {
   const watchlist = await getJSON("/api/watchlist");
   body.innerHTML = watchlist
     .map(
-      (w) =>
-        `<tr data-name="${w.name}"><td>${w.name}</td><td>${w.ticker}</td>` +
+      (w, i) =>
+        `<tr class="watch-row" data-name="${w.name}" style="animation-delay:${i * 45}ms"><td><div class="sym-cell">${iconFor(w.name)}<span>${w.name}</span></div></td><td>${w.ticker}</td>` +
         `<td class="c-num" data-cell="last">—</td><td class="c-num" data-cell="high">—</td><td class="c-num" data-cell="low">—</td></tr>`
     )
     .join("");
@@ -77,14 +133,22 @@ async function loadWatchlist() {
   for (let i = 0; i < watchlist.length; i++) {
     if (i > 0) await sleep(WATCHLIST_ROW_DELAY_MS);
     const { name } = watchlist[i];
-    status.textContent = `Fetching quotes… (${i + 1}/${watchlist.length})`;
+    status.innerHTML = `<span class="spinner"></span>Fetching quotes… (${i + 1}/${watchlist.length})`;
     status.classList.remove("error");
     try {
       const quote = await getJSON(`/api/quote/${name}`);
       const row = body.querySelector(`tr[data-name="${name}"]`);
-      row.querySelector('[data-cell="last"]').textContent = fmtPlain(quote.price);
+      const lastCell = row.querySelector('[data-cell="last"]');
+      const prev = lastQuoteValues[name];
+      lastCell.textContent = fmtPlain(quote.price);
       row.querySelector('[data-cell="high"]').textContent = fmtPlain(quote.day_high);
       row.querySelector('[data-cell="low"]').textContent = fmtPlain(quote.day_low);
+      if (prev !== undefined && prev !== quote.price) {
+        lastCell.classList.remove("flash-up", "flash-down");
+        void lastCell.offsetWidth; // restart animation
+        lastCell.classList.add(quote.price > prev ? "flash-up" : "flash-down");
+      }
+      lastQuoteValues[name] = quote.price;
     } catch (err) {
       errors++;
     }
@@ -99,11 +163,11 @@ document.getElementById("refresh-quotes").addEventListener("click", loadWatchlis
 function selectSymbol(name) {
   selectedSymbol = name;
   document.querySelectorAll("#watchlist-body tr").forEach((r) => r.classList.toggle("selected", r.dataset.name === name));
-  document.getElementById("chart-title").textContent = `Chart — ${name}`;
+  document.getElementById("chart-title").innerHTML = `${iconFor(name)} Chart — ${name}`;
   loadChart(name);
 }
 
-// ---- chart (shared SVG line-chart renderer) ------------------------------
+// ---- chart (shared SVG line-chart renderer, with glow + draw-in animation) --
 
 function renderLineChart(svgEl, series, { showLegend = false } = {}) {
   // series: [{ label, color, points: [{x: unixSeconds, y: number}] }]
@@ -122,7 +186,17 @@ function renderLineChart(svgEl, series, { showLegend = false } = {}) {
   const yAt = (y) => padT + plotH - ((y - minY) / rangeY) * plotH;
 
   const gridSteps = [minY + rangeY * 0.15, minY + rangeY * 0.5, minY + rangeY * 0.85];
-  let svg = gridSteps
+  let svg = `<defs>
+    <linearGradient id="chartFade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3.2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>`;
+  svg += gridSteps
     .map((v) => {
       const y = yAt(v).toFixed(2);
       return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="var(--border)" stroke-width="1" />` +
@@ -130,12 +204,17 @@ function renderLineChart(svgEl, series, { showLegend = false } = {}) {
     })
     .join("");
 
-  series.forEach((s) => {
+  series.forEach((s, si) => {
     if (!s.points.length) return;
     const path = s.points.map((p, i) => `${i === 0 ? "M" : "L"}${xAt(p.x).toFixed(2)},${yAt(p.y).toFixed(2)}`).join(" ");
-    svg += `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />`;
     const last = s.points[s.points.length - 1];
-    svg += `<circle cx="${xAt(last.x).toFixed(2)}" cy="${yAt(last.y).toFixed(2)}" r="4.5" fill="${s.color}" stroke="var(--surface)" stroke-width="2" />`;
+    if (si === 0) {
+      const baseline = padT + plotH;
+      const areaPath = path + ` L${xAt(last.x).toFixed(2)},${baseline} L${xAt(s.points[0].x).toFixed(2)},${baseline} Z`;
+      svg += `<path class="chart-area" d="${areaPath}" fill="url(#chartFade)" stroke="none" />`;
+    }
+    svg += `<path class="chart-line" data-series="${si}" d="${path}" fill="none" stroke="${s.color}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" ${si === 0 ? 'filter="url(#glow)"' : ""} />`;
+    svg += `<circle class="chart-endpoint" cx="${xAt(last.x).toFixed(2)}" cy="${yAt(last.y).toFixed(2)}" r="5" fill="${s.color}" stroke="var(--surface-solid)" stroke-width="2" filter="url(#glow)" />`;
   });
 
   if (showLegend) {
@@ -146,11 +225,18 @@ function renderLineChart(svgEl, series, { showLegend = false } = {}) {
     });
   }
   svgEl.innerHTML = svg;
+
+  // set each drawn line's dash length to its own real path length so the draw-in
+  // animation traces the actual curve instead of a guessed constant.
+  svgEl.querySelectorAll(".chart-line").forEach((line) => {
+    const len = line.getTotalLength();
+    line.style.setProperty("--line-len", len);
+  });
 }
 
 async function loadChart(name) {
   const summary = document.getElementById("chart-summary");
-  summary.textContent = "Loading…";
+  summary.innerHTML = loadingHtml("Loading…");
   summary.classList.remove("error");
   try {
     const bars = await getJSON(`/api/history/${name}?range=10y&interval=1d`);
@@ -166,12 +252,63 @@ async function loadChart(name) {
   }
 }
 
+// ---- gauges (radial arcs, used by the Risk panel) ---------------------------
+
+function renderGauge(container, { label, valuePct, limitPct, size = 108 }) {
+  const r = 40, stroke = 9, c = 2 * Math.PI * r;
+  const ratio = limitPct > 0 ? Math.min(1.15, valuePct / limitPct) : 0; // allow slight over-limit visual
+  const dash = Math.min(1, ratio) * c;
+  const over = valuePct > limitPct;
+  const color = over ? "var(--negative)" : ratio > 0.75 ? "var(--accent)" : "var(--positive)";
+  const id = "g" + Math.random().toString(36).slice(2, 8);
+  const html = `
+    <div class="gauge">
+      <svg width="${size}" height="${size}" viewBox="0 0 100 100">
+        <circle class="gauge-ring-bg" cx="50" cy="50" r="${r}"/>
+        <circle id="${id}" class="gauge-ring-fill" cx="50" cy="50" r="${r}" stroke="${color}"
+          stroke-dasharray="${c}" stroke-dashoffset="${c}"/>
+        <text x="50" y="54" text-anchor="middle" class="gauge-value" fill="var(--text-primary)" font-size="15">${valuePct.toFixed(1)}%</text>
+      </svg>
+      <span class="gauge-label">${escapeHtml(label)}<br/>limit ${limitPct.toFixed(0)}%</span>
+    </div>`;
+  container.insertAdjacentHTML("beforeend", html);
+  requestAnimationFrame(() => {
+    const ring = document.getElementById(id);
+    if (ring) ring.style.strokeDashoffset = String(c - dash);
+  });
+}
+
+// ---- donut (allocation weights, used by Fund + Optimizer panels) ------------
+
+function renderDonut(container, weights) {
+  const entries = Object.entries(weights).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) { container.hidden = true; return; }
+  container.hidden = false;
+  const r = 46, stroke = 16, c = 2 * Math.PI * r;
+  let offset = 0;
+  const arcs = entries
+    .map(([name, w], i) => {
+      const color = DONUT_COLORS[i % DONUT_COLORS.length];
+      const len = w * c;
+      const dashoffset = c - offset;
+      offset += len;
+      return `<circle class="donut-seg" cx="60" cy="60" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}"
+        stroke-dasharray="${len} ${c - len}" stroke-dashoffset="${dashoffset}" transform="rotate(-90 60 60)"
+        style="transition-delay:${i * 90}ms" />`;
+    })
+    .join("");
+  const legend = entries
+    .map(([name, w], i) => `<div class="donut-legend-item"><span class="donut-swatch" style="background:${DONUT_COLORS[i % DONUT_COLORS.length]}"></span>${name} <span class="muted">${(w * 100).toFixed(1)}%</span></div>`)
+    .join("");
+  container.innerHTML = `<svg class="donut-ring" width="120" height="120" viewBox="0 0 120 120">${arcs}</svg><div class="donut-legend">${legend}</div>`;
+}
+
 // ---- setup scanner --------------------------------------------------------
 
 document.getElementById("run-scanner").addEventListener("click", async () => {
   const out = document.getElementById("scanner-output");
   if (!selectedSymbol) { out.textContent = "Select a symbol in the watchlist first."; return; }
-  out.textContent = "Scanning…";
+  out.innerHTML = loadingHtml("Scanning…");
   try {
     const r = await getJSON(`/api/scan/${selectedSymbol}`);
     const lines = [
@@ -191,8 +328,9 @@ document.getElementById("run-scanner").addEventListener("click", async () => {
 document.getElementById("run-decision").addEventListener("click", async () => {
   const out = document.getElementById("decision-output");
   const riskOut = document.getElementById("risk-output");
+  const gauges = document.getElementById("risk-gauges");
   if (!selectedSymbol) { out.textContent = "Select a symbol in the watchlist first."; return; }
-  out.textContent = "Building memo…";
+  out.innerHTML = loadingHtml("Building memo…");
   try {
     const r = await getJSON(`/api/decision/${selectedSymbol}`);
     out.innerHTML =
@@ -206,6 +344,11 @@ document.getElementById("run-decision").addEventListener("click", async () => {
       r.risk.checks
         .map((c) => `<div class="check-row"><span class="${c.passed ? "check-pass" : "check-fail"}">${c.passed ? "✓" : "✗"}</span> <strong>${c.name}</strong> — ${escapeHtml(c.detail)}</div>`)
         .join("");
+
+    gauges.innerHTML = "";
+    renderGauge(gauges, { label: "Position size", valuePct: r.risk.position_size_pct, limitPct: 1.0 });
+    renderGauge(gauges, { label: "Exposure", valuePct: r.risk.exposure_pct, limitPct: 50.0 });
+    renderGauge(gauges, { label: "Drawdown", valuePct: r.risk.drawdown_pct, limitPct: 20.0 });
   } catch (err) {
     out.textContent = "Error: " + err.message;
   }
@@ -215,10 +358,13 @@ document.getElementById("run-decision").addEventListener("click", async () => {
 
 document.getElementById("run-optimizer").addEventListener("click", async () => {
   const out = document.getElementById("optimizer-output");
+  const donut = document.getElementById("optimizer-donut");
   const method = document.getElementById("optimizer-method").value;
-  out.textContent = "Loading watchlist history and optimizing… (first run can take a few seconds)";
+  out.innerHTML = loadingHtml("Loading watchlist history and optimizing… (first run can take a few seconds)");
+  donut.hidden = true;
   try {
     const r = await getJSON(`/api/optimize?method=${method}`);
+    renderDonut(donut, r.weights);
     const rows = Object.entries(r.weights).sort((a, b) => b[1] - a[1]);
     const lines = [
       `Method: ${r.method}`,
@@ -241,7 +387,7 @@ document.getElementById("run-optimizer").addEventListener("click", async () => {
 document.getElementById("run-forecast-baseline").addEventListener("click", async () => {
   const out = document.getElementById("forecast-output");
   if (!selectedSymbol) { out.textContent = "Select a symbol in the watchlist first."; return; }
-  out.textContent = "Forecasting…";
+  out.innerHTML = loadingHtml("Forecasting…");
   try {
     const r = await getJSON(`/api/forecast/baseline/${selectedSymbol}?horizon=10`);
     const lines = [`Method: ${r.method}`, ""];
@@ -258,7 +404,7 @@ document.getElementById("run-forecast-baseline").addEventListener("click", async
 document.getElementById("run-forecast-kronos").addEventListener("click", async () => {
   const out = document.getElementById("forecast-output");
   if (!selectedSymbol) { out.textContent = "Select a symbol in the watchlist first."; return; }
-  out.textContent = "Loading Kronos-mini (first run downloads ~30MB of weights)…";
+  out.innerHTML = loadingHtml("Loading Kronos-mini (first run downloads ~30MB of weights)…");
   try {
     const r = await getJSON(`/api/forecast/kronos/${selectedSymbol}?horizon=10`);
     const lines = [`Method: ${r.method}`, ""];
@@ -275,7 +421,7 @@ document.getElementById("run-forecast-kronos").addEventListener("click", async (
 document.getElementById("run-backtest").addEventListener("click", async () => {
   const out = document.getElementById("backtest-output");
   if (!selectedSymbol) { out.textContent = "Select a symbol in the watchlist first."; return; }
-  out.textContent = "Running backtest on real history…";
+  out.innerHTML = loadingHtml("Running backtest on real history…");
   try {
     const r = await getJSON(`/api/backtest/${selectedSymbol}`);
     renderLineChart(
@@ -287,26 +433,26 @@ document.getElementById("run-backtest").addEventListener("click", async () => {
       { showLegend: true }
     );
     const s = r.stats;
-    out.textContent = [
-      `Data: ${r.bar_count} real daily bars`,
-      "",
-      `Starting equity   ${fmtMoney(s.starting_equity)}`,
-      `Ending equity     ${fmtMoney(s.ending_equity)}`,
-      `Total return      ${fmtPct(s.total_return_pct)}`,
-      `Trades            ${s.total_trades}`,
-      `Win rate          ${s.win_rate_pct.toFixed(1)}%`,
-      `Avg win / loss    ${fmtMoney(s.avg_win)} / ${fmtMoney(s.avg_loss)}`,
-      `Profit factor     ${s.profit_factor === Infinity ? "inf" : s.profit_factor.toFixed(2)}`,
-      `Max drawdown      ${s.max_drawdown_pct.toFixed(2)}%`,
-    ].join("\n");
+    out.innerHTML =
+      `Data: ${r.bar_count} real daily bars\n\n` +
+      `Starting equity   ${fmtMoney(s.starting_equity)}\n` +
+      `Ending equity     <span id="bt-ending-equity"></span>\n` +
+      `Total return      <span id="bt-total-return"></span>\n` +
+      `Trades            ${s.total_trades}\n` +
+      `Win rate          ${s.win_rate_pct.toFixed(1)}%\n` +
+      `Avg win / loss    ${fmtMoney(s.avg_win)} / ${fmtMoney(s.avg_loss)}\n` +
+      `Profit factor     ${s.profit_factor === Infinity ? "inf" : s.profit_factor.toFixed(2)}\n` +
+      `Max drawdown      ${s.max_drawdown_pct.toFixed(2)}%`;
+    const endEl = document.getElementById("bt-ending-equity");
+    const retEl = document.getElementById("bt-total-return");
+    endEl.className = s.ending_equity >= s.starting_equity ? "pos" : "neg";
+    retEl.className = s.total_return_pct >= 0 ? "pos" : "neg";
+    animateCountUp(endEl, s.ending_equity, { decimals: 2, prefix: "$" });
+    animateCountUp(retEl, s.total_return_pct, { decimals: 2, prefix: s.total_return_pct >= 0 ? "+" : "", suffix: "%" });
   } catch (err) {
     out.textContent = "Error: " + err.message;
   }
 });
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
 
 // ---- fund (whole-watchlist scan + allocation) --------------------------------
 
@@ -314,30 +460,40 @@ document.getElementById("run-fund").addEventListener("click", async () => {
   const summary = document.getElementById("fund-summary");
   const table = document.getElementById("fund-table");
   const body = document.getElementById("fund-body");
-  summary.textContent = "Scanning the whole watchlist… (reuses cached history where possible, so this is usually quick)";
+  const donut = document.getElementById("fund-donut");
+  summary.innerHTML = loadingHtml("Scanning the whole watchlist… (reuses cached history where possible, so this is usually quick)");
   table.hidden = true;
+  donut.hidden = true;
 
   try {
     const r = await getJSON("/api/fund");
     const alloc = r.allocation ? r.allocation.weights : {};
+    if (r.allocation) renderDonut(donut, alloc);
 
     body.innerHTML = r.entries
-      .map((e) => {
+      .map((e, i) => {
+        const rowStyle = `style="animation-delay:${i * 60}ms"`;
         if (e.error) {
-          return `<tr><td>${e.symbol}</td><td colspan="5" class="muted">${escapeHtml(e.error)}</td></tr>`;
+          return `<tr class="watch-row" ${rowStyle}><td>${iconFor(e.symbol)} ${e.symbol}</td><td colspan="5" class="muted">${escapeHtml(e.error)}</td></tr>`;
         }
         const m = e.memo;
         const weight = alloc[e.symbol];
+        const weightPct = weight !== undefined ? weight * 100 : 0;
         return (
-          `<tr><td>${e.symbol}</td><td>${m.scan.pattern}</td>` +
+          `<tr class="watch-row" ${rowStyle}><td><div class="sym-cell">${iconFor(e.symbol)}<span>${e.symbol}</span></div></td><td>${m.scan.pattern}</td>` +
           `<td class="c-num">${m.scan.score_pct.toFixed(0)}%</td>` +
           `<td><span class="verdict-pill verdict-${m.verdict}">${m.verdict}</span></td>` +
           `<td class="c-num">${m.plan.risk_reward_ratio.toFixed(2)}</td>` +
-          `<td class="c-num">${weight !== undefined ? (weight * 100).toFixed(1) + "%" : "—"}</td></tr>`
+          `<td class="c-num">${weight !== undefined ? weightPct.toFixed(1) + "%" : "—"}` +
+          (weight !== undefined ? `<div class="allocation-bar-track"><div class="allocation-bar-fill" data-w="${weightPct}"></div></div>` : "") +
+          `</td></tr>`
         );
       })
       .join("");
     table.hidden = false;
+    requestAnimationFrame(() => {
+      body.querySelectorAll(".allocation-bar-fill").forEach((el) => { el.style.width = el.dataset.w + "%"; });
+    });
 
     const approvedCount = r.approved_symbols.length;
     const watchlistCount = r.watchlist_symbols.length;
@@ -363,3 +519,4 @@ document.getElementById("run-fund").addEventListener("click", async () => {
 
 loadState();
 loadWatchlist();
+requestAnimationFrame(() => positionTabUnderline(document.querySelector("#tabs button.active")));

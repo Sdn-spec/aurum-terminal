@@ -55,6 +55,13 @@ and see a suggested capital split (via skfolio) across whatever cleared the
 bar. Nothing here trades for you — it's a recommendation, same as the
 single-symbol Decision Memo.
 
+**The UI:** a dark, glass-panel dashboard with real motion, not decoration —
+a live price flashes green/red on change (the same way a real terminal
+does), the chart's line actually draws itself in and glows, the Risk panel
+renders each check as a radial gauge against its limit, and the Fund/
+Optimizer views render the suggested split as an animated donut plus
+per-row allocation bars. Everything respects `prefers-reduced-motion`.
+
 ## If Yahoo is rate-limiting you (HTTP 429 / 502 errors)
 
 This happened repeatedly during development, and to a live user session too

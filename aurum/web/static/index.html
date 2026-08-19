@@ -48,6 +48,7 @@
         <button data-tab="optimizer">Optimizer</button>
         <button data-tab="forecast">Forecast</button>
         <button data-tab="backtest">Backtest</button>
+        <span class="tab-underline" id="tab-underline"></span>
       </nav>
 
       <section class="tab-panel card active" id="panel-fund">
@@ -57,6 +58,7 @@
         </div>
         <p class="status-line">Runs the scanner and risk gate across every symbol at once, then suggests how to split capital across whatever clears the bar. Nothing here trades for you.</p>
         <div id="fund-summary" class="panel-body"></div>
+        <div id="fund-donut" class="donut-wrap" hidden></div>
         <div class="table-scroll">
           <table id="fund-table" hidden>
             <thead><tr><th>Symbol</th><th>Pattern</th><th class="c-num">Score</th><th>Verdict</th><th class="c-num">R:R</th><th class="c-num">Allocation</th></tr></thead>
@@ -83,6 +85,7 @@
 
       <section class="tab-panel card" id="panel-risk">
         <div class="card-head"><h2>Risk Gate</h2></div>
+        <div id="risk-gauges" class="gauge-row"></div>
         <div id="risk-output" class="panel-body">Run a Decision Memo to see the risk checklist for the current account settings and selected symbol.</div>
       </section>
 
@@ -94,6 +97,7 @@
             <button id="run-optimizer" type="button">Run</button>
           </div>
         </div>
+        <div id="optimizer-donut" class="donut-wrap" hidden></div>
         <div id="optimizer-output" class="panel-body">Runs skfolio across the whole watchlist.</div>
       </section>
 
