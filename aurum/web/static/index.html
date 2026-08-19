@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aurum</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,680&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="page-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">Au</span>
+      <div>
+        <h1>Aurum</h1>
+        <p class="tagline">Personal trading desk &middot; live data, optimizer, scanner, risk gate, forecasts, backtests</p>
+      </div>
+    </div>
+    <form id="account-form" class="account-form">
+      <label>Equity <input type="number" id="f-equity" step="any"></label>
+      <label>Peak equity <input type="number" id="f-peak" step="any"></label>
+      <label>Realized P&amp;L today <input type="number" id="f-pnl" step="any"></label>
+      <button type="submit">Save</button>
+    </form>
+  </header>
+
+  <div id="body">
+    <aside id="watchlist-pane" class="card">
+      <div class="card-head"><h2>Watchlist</h2><button id="refresh-quotes" type="button">Refresh</button></div>
+      <div class="table-scroll">
+        <table id="watchlist-table">
+          <thead><tr><th>Symbol</th><th>Ticker</th><th class="c-num">Last</th><th class="c-num">Day High</th><th class="c-num">Day Low</th></tr></thead>
+          <tbody id="watchlist-body"></tbody>
+        </table>
+      </div>
+      <p id="watchlist-status" class="status-line"></p>
+    </aside>
+
+    <main id="main-pane">
+      <nav class="tabs" id="tabs">
+        <button data-tab="chart" class="active">Chart</button>
+        <button data-tab="scanner">Scanner</button>
+        <button data-tab="decision">Decision</button>
+        <button data-tab="risk">Risk</button>
+        <button data-tab="optimizer">Optimizer</button>
+        <button data-tab="forecast">Forecast</button>
+        <button data-tab="backtest">Backtest</button>
+      </nav>
+
+      <section class="tab-panel card active" id="panel-chart">
+        <div class="card-head"><h2 id="chart-title">Chart — select a symbol</h2></div>
+        <div id="chart-wrap"><svg id="chart-svg" viewBox="0 0 640 220" preserveAspectRatio="xMidYMid meet"></svg></div>
+        <p id="chart-summary" class="status-line"></p>
+      </section>
+
+      <section class="tab-panel card" id="panel-scanner">
+        <div class="card-head"><h2>Setup Scanner</h2><button id="run-scanner" type="button">Scan selected symbol</button></div>
+        <div id="scanner-output" class="panel-body">Select a symbol, then press Scan.</div>
+      </section>
+
+      <section class="tab-panel card" id="panel-decision">
+        <div class="card-head"><h2>Decision Memo</h2><button id="run-decision" type="button">Build memo</button></div>
+        <div id="decision-output" class="panel-body">Combines the scanner, the risk gate, and a trade plan into one verdict — take it, watch it, or skip it. You still make the call.</div>
+      </section>
+
+      <section class="tab-panel card" id="panel-risk">
+        <div class="card-head"><h2>Risk Gate</h2></div>
+        <div id="risk-output" class="panel-body">Run a Decision Memo to see the risk checklist for the current account settings and selected symbol.</div>
+      </section>
+
+      <section class="tab-panel card" id="panel-optimizer">
+        <div class="card-head">
+          <h2>Portfolio Optimizer</h2>
+          <div>
+            <select id="optimizer-method"><option value="hrp">Hierarchical Risk Parity</option><option value="mean_risk">Mean-Variance</option></select>
+            <button id="run-optimizer" type="button">Run</button>
+          </div>
+        </div>
+        <div id="optimizer-output" class="panel-body">Runs skfolio across the whole watchlist.</div>
+      </section>
+
+      <section class="tab-panel card" id="panel-forecast">
+        <div class="card-head">
+          <h2>Forecast</h2>
+          <div>
+            <button id="run-forecast-baseline" type="button">Baseline</button>
+            <button id="run-forecast-kronos" type="button">Kronos-mini</button>
+          </div>
+        </div>
+        <div id="forecast-output" class="panel-body">Baseline is instant. Kronos runs a real ~4M-parameter model on CPU — first call downloads ~30MB of weights and takes a few seconds.</div>
+      </section>
+
+      <section class="tab-panel card" id="panel-backtest">
+        <div class="card-head"><h2>Trend Pullback Backtest</h2><button id="run-backtest" type="button">Run on real history</button></div>
+        <div id="backtest-chart-wrap"><svg id="backtest-svg" viewBox="0 0 640 220" preserveAspectRatio="xMidYMid meet"></svg></div>
+        <div id="backtest-output" class="panel-body"></div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="foot-note">Runs entirely on your machine — no auth, not meant to be exposed to the internet.</footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

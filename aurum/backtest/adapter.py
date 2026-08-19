@@ -9,7 +9,24 @@ import sys
 from pathlib import Path
 from typing import List
 
-_NAUTILUS_MINI_PATH = Path(__file__).resolve().parents[3] / "nautilus-mini"
+
+def _find_nautilus_mini() -> Path:
+    """Walk up from this file looking for a sibling 'nautilus-mini' directory.
+    A fixed parents[N] depth breaks the moment this file is nested differently
+    than expected (e.g. run from inside a git worktree) — searching upward is
+    robust to that and still finds the right place in the normal layout."""
+    here = Path(__file__).resolve()
+    for ancestor in here.parents:
+        candidate = ancestor / "nautilus-mini"
+        if candidate.is_dir():
+            return candidate
+    raise ImportError(
+        f"Could not find a sibling 'nautilus-mini' directory above {here} — "
+        "aurum-terminal expects to sit next to nautilus-mini (both under the same parent folder)."
+    )
+
+
+_NAUTILUS_MINI_PATH = _find_nautilus_mini()
 if str(_NAUTILUS_MINI_PATH) not in sys.path:
     sys.path.insert(0, str(_NAUTILUS_MINI_PATH))
 

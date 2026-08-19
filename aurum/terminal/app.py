@@ -93,12 +93,12 @@ class Aurum(App):
 
     def on_mount(self) -> None:
         table = self.query_one("#watchlist-table", DataTable)
-        table.add_column("Symbol", key="symbol")
-        table.add_column("Ticker", key="ticker")
-        table.add_column("Last", key="last")
-        table.add_column("Day High", key="high")
-        table.add_column("Day Low", key="low")
-        table.add_column("Updated", key="updated")
+        table.add_column("Symbol", key="symbol", width=9)
+        table.add_column("Ticker", key="ticker", width=10)
+        table.add_column("Last", key="last", width=12)
+        table.add_column("Day High", key="high", width=12)
+        table.add_column("Day Low", key="low", width=12)
+        table.add_column("Updated", key="updated", width=13)
         for name in self.watchlist:
             table.add_row(name, universe.resolve(name), "—", "—", "—", "—", key=name)
         self.set_status("Ready. Press r to fetch live quotes.")
@@ -113,7 +113,12 @@ class Aurum(App):
         self.set_status("Fetching quotes…")
         table = self.query_one("#watchlist-table", DataTable)
         errors = []
-        for name in self.watchlist:
+        for i, name in enumerate(self.watchlist):
+            if i > 0:
+                # Yahoo's edge rate-limits on request *burst*, not just retries within
+                # one call — firing 7 quotes back-to-back tripped 429s on 6 of them even
+                # with per-call backoff. A small gap between symbols avoids that.
+                await asyncio.sleep(0.8)
             ticker = universe.resolve(name)
             try:
                 quote = await asyncio.to_thread(yahoo.get_quote, ticker)
@@ -122,6 +127,7 @@ class Aurum(App):
                 table.update_cell(name, "high", f"{quote.day_high:,.2f}")
                 table.update_cell(name, "low", f"{quote.day_low:,.2f}")
                 table.update_cell(name, "updated", updated)
+                self.set_status(f"Fetching quotes… ({i + 1}/{len(self.watchlist)})")
             except yahoo.DataFeedError as e:
                 errors.append(f"{name}: {e}")
         if errors:
@@ -222,13 +228,14 @@ class Aurum(App):
 
         self.query_one("#side-title", Static).update(f"PANEL — Kronos Forecast ({self.selected})")
         body = self.query_one("#side-body", Static)
-        body.update("Loading Kronos-mini (first run downloads ~30MB of weights)…")
+        body.update("Fetching price history…")
         try:
             bars = await self._get_history(self.selected)
         except yahoo.DataFeedError as e:
             body.update(f"[red]{e}[/red]")
             return
 
+        body.update("Loading Kronos-mini (first run downloads ~30MB of weights)…")
         import pandas as pd
 
         df = pd.DataFrame(
