@@ -14,12 +14,12 @@ This module is never called unless a key is configured — see
 `aurum.datafeed.provider` for how it's wired in as a fallback, not a
 replacement.
 
-Honest caveat: this parses Twelve Data's documented /quote and /time_series
-response shapes, and is unit-tested against hand-built responses matching
-that documented shape — but which of THIS watchlist's specific symbols
-(XAU/USD, DXY, NDX, WTI/USD, ...) actually resolve on the free tier hasn't
-been verified against a live key from here. If one doesn't resolve, adjust
-`aurum.datafeed.universe.TWELVEDATA_ALIASES`.
+Verified live against a real free-tier key (2026-08-20): GOLD (XAU/USD) and
+BTC (BTC/USD) work directly, including 5000 real daily Gold bars back to
+2008. SILVER, OIL, SPX, and NASDAQ are free-tier-restricted on Twelve Data
+("available starting with the Grow or Venture plan") — see
+`aurum.datafeed.universe.TWELVEDATA_ALIASES` for the full breakdown and the
+DXY-to-UUP proxy substitution.
 """
 
 import json

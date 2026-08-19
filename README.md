@@ -81,12 +81,18 @@ already in place:
    {"twelvedata_api_key": "your-key-here"}
    ```
    No key configured means no fallback attempt — you'll see Yahoo's own
-   error, unchanged. **Honest caveat:** the parsing is correct and unit
-   tested against Twelve Data's documented response shape, but which of
-   this watchlist's specific symbols (XAU/USD, DXY, NDX, WTI/USD, ...)
-   actually resolve on the free tier hasn't been verified against a live
-   key from here — if one doesn't resolve, it's a one-line fix in
-   `aurum/datafeed/universe.py`'s `TWELVEDATA_ALIASES`.
+   error, unchanged.
+
+   **Verified live against a real free-tier key (2026-08-20), not a
+   guess:** GOLD and BTC work directly — confirmed with real data, including
+   5000 real daily Gold bars back to 2008. SILVER, OIL, SPX, and NASDAQ
+   return "available starting with the Grow or Venture plan" on the free
+   tier — they fall through to Yahoo's own error when both providers fail,
+   same as having no fallback at all for those four. DXY has no free-tier
+   index symbol at all; it's mapped to `UUP` (an ETF that tracks dollar
+   strength) as an approximate proxy, not the literal index. All of this is
+   recorded with dates in `aurum/datafeed/universe.py`'s `TWELVEDATA_ALIASES`
+   — if Twelve Data's free tier changes, that's where to update it.
 
 Other providers considered and why they lost: **Google Finance** has no
 public API anymore (the old one was deprecated years ago). **Stooq** is

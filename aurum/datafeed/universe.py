@@ -19,17 +19,26 @@ ALIASES = {
 
 # The same instruments, in Twelve Data's own symbol format — used only as a
 # fallback when Yahoo fails and a Twelve Data key is configured (see
-# aurum.datafeed.provider). Unverified against a live key for the less
-# common ones (OIL, DXY, NASDAQ) — adjust here if a symbol doesn't resolve.
+# aurum.datafeed.provider). Verified live against a free-tier key on
+# 2026-08-20 — free-tier coverage is genuinely partial, not a guess:
+#   GOLD, BTC          -> work directly, real data confirmed live
+#   SILVER, OIL,
+#   SPX, NASDAQ         -> free tier returns "available starting with the
+#                          Grow or Venture plan" — these fall through to
+#                          Yahoo's own error when both providers fail
+#   DXY                 -> no free-tier index symbol exists at all; mapped
+#                          to UUP (Invesco's USD-bullish ETF) as a directional
+#                          proxy — it tracks dollar strength, not the DXY
+#                          index itself, so treat it as approximate
 TWELVEDATA_ALIASES = {
     "GOLD": "XAU/USD",
-    "SILVER": "XAG/USD",
-    "OIL": "WTI/USD",
+    "SILVER": "XAG/USD",  # needs a paid plan on this key; kept mapped for when it's upgraded
+    "OIL": "WTI/USD",  # needs a paid plan on this key; kept mapped for when it's upgraded
     "BTC": "BTC/USD",
     "ETH": "ETH/USD",
-    "SPX": "SPX",
-    "NASDAQ": "NDX",
-    "DXY": "DXY",
+    "SPX": "SPX",  # needs a paid plan on this key; kept mapped for when it's upgraded
+    "NASDAQ": "NDX",  # needs a paid plan on this key; kept mapped for when it's upgraded
+    "DXY": "UUP",  # ETF proxy — see note above
     "EURUSD": "EUR/USD",
 }
 
