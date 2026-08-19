@@ -1,12 +1,25 @@
+import random
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from aurum.datafeed.yahoo import HistoryBar
 from aurum.decision import memo
 from aurum.risk import engine as risk_engine
 from aurum.signals.scanner import Confirmation, ScanResult
+
+
+def _trending_bars(n=200, start=100.0, step=0.3, seed=1, volume=1000.0):
+    rng = random.Random(seed)
+    bars, price, ts = [], start, 1_700_000_000
+    for i in range(n):
+        price = price + step + rng.gauss(0, 0.05)
+        o = price - 0.05
+        bars.append(HistoryBar(ts, o, price + 0.1, price - 0.1, price, volume))
+        ts += 86400
+    return bars
 
 
 def _scan(setup_detected: bool, score_pct: float, last_close: float = 110.0, ema: float = 100.0) -> ScanResult:
@@ -78,6 +91,45 @@ class TestDecisionMemo(unittest.TestCase):
         result = memo.build_memo("TEST", scan, _passing_risk(), plan)
         self.assertEqual(result.verdict, "WATCHLIST")
         self.assertTrue(any("Risk/reward" in r for r in result.reasons))
+
+
+class TestDecideForSymbol(unittest.TestCase):
+    def test_runs_end_to_end_on_a_real_bar_series(self):
+        bars = _trending_bars()
+        result = memo.decide_for_symbol("TEST", bars, equity=3000.0, peak_equity=3000.0)
+        self.assertIn(result.verdict, ["APPROVED", "WATCHLIST", "REJECTED"])
+        self.assertEqual(result.symbol, "TEST")
+        self.assertGreater(result.plan.entry, 0)
+
+    def test_too_little_history_raises_value_error(self):
+        bars = _trending_bars(n=10)
+        with self.assertRaises(ValueError):
+            memo.decide_for_symbol("TEST", bars, equity=3000.0, peak_equity=3000.0)
+
+    def test_matches_manually_assembled_memo_for_the_same_inputs(self):
+        # decide_for_symbol should produce the exact same result as manually
+        # wiring scan -> build_trade_plan -> assess_trade -> build_memo,
+        # since it's meant to be the one place that logic lives.
+        from aurum.signals.scanner import SWING_LOOKBACK, scan as run_scan
+
+        bars = _trending_bars()
+        scan_result = run_scan(bars, "TEST")
+        swing_window = bars[-SWING_LOOKBACK - 1 : -1]
+        plan = memo.build_trade_plan(scan_result, min(b.low for b in swing_window), max(b.high for b in swing_window))
+        risk_budget = 3000.0 * 0.01
+        units = risk_budget / plan.risk_per_unit if plan.risk_per_unit > 0 else 0.0
+        closes = [b.close for b in bars[-60:]]
+        recent_returns = [(closes[i] / closes[i - 1]) - 1.0 for i in range(1, len(closes))]
+        expected_risk = risk_engine.assess_trade(
+            equity=3000.0, peak_equity=3000.0, proposed_risk_dollars=risk_budget,
+            proposed_notional=plan.entry * units, recent_returns=recent_returns,
+        )
+        expected = memo.build_memo("TEST", scan_result, expected_risk, plan)
+
+        actual = memo.decide_for_symbol("TEST", bars, equity=3000.0, peak_equity=3000.0)
+        self.assertEqual(actual.verdict, expected.verdict)
+        self.assertEqual(actual.reasons, expected.reasons)
+        self.assertEqual(actual.plan.entry, expected.plan.entry)
 
 
 if __name__ == "__main__":

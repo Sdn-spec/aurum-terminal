@@ -6,10 +6,11 @@ review required" step works.
 """
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
-from ..risk.engine import RiskAssessment
-from ..signals.scanner import ScanResult
+from ..datafeed.yahoo import HistoryBar
+from ..risk.engine import RiskAssessment, RiskLimits, assess_trade
+from ..signals.scanner import SWING_LOOKBACK, ScanResult, scan as run_scan
 
 MIN_RISK_REWARD = 1.5
 
@@ -85,3 +86,40 @@ def build_memo(symbol: str, scan: ScanResult, risk: RiskAssessment, plan: TradeP
         verdict = "WATCHLIST"
 
     return DecisionMemo(symbol=symbol, scan=scan, risk=risk, plan=plan, verdict=verdict, reasons=reasons)
+
+
+def decide_for_symbol(
+    symbol: str,
+    bars: List[HistoryBar],
+    equity: float,
+    peak_equity: float,
+    realized_pnl_today: float = 0.0,
+    limits: Optional[RiskLimits] = None,
+) -> DecisionMemo:
+    """The full pipeline for one symbol: scan -> trade plan -> size to 1% risk
+    -> risk gate -> memo. This is the single source of truth both the
+    single-symbol `/api/decision` endpoint and the fund-wide scanner use —
+    they were two copies of this exact logic before, which is exactly the
+    kind of thing that quietly drifts apart if left duplicated."""
+    scan_result = run_scan(bars, symbol)  # raises ValueError if there's not enough history yet
+
+    swing_window = bars[-SWING_LOOKBACK - 1 : -1]
+    swing_low = min(b.low for b in swing_window)
+    swing_high = max(b.high for b in swing_window)
+    plan = build_trade_plan(scan_result, swing_low, swing_high)
+
+    risk_budget = equity * 0.01
+    units = risk_budget / plan.risk_per_unit if plan.risk_per_unit > 0 else 0.0
+    closes = [b.close for b in bars[-60:]]
+    recent_returns = [(closes[i] / closes[i - 1]) - 1.0 for i in range(1, len(closes))]
+    risk_result = assess_trade(
+        equity=equity,
+        peak_equity=peak_equity,
+        proposed_risk_dollars=risk_budget,
+        proposed_notional=plan.entry * units,
+        realized_pnl_today=realized_pnl_today,
+        recent_returns=recent_returns,
+        limits=limits,
+    )
+
+    return build_memo(symbol, scan_result, risk_result, plan)

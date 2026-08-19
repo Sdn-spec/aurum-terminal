@@ -22,7 +22,6 @@ from ..datafeed import cache, universe, yahoo
 from ..decision import memo as decision_memo
 from ..forecast import baseline
 from ..optimize import engine as optimize_engine
-from ..risk import engine as risk_engine
 from ..signals import scanner
 
 STATE_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "state.json"
@@ -35,6 +34,34 @@ def _to_dict(obj):
     if dataclasses.is_dataclass(obj):
         return dataclasses.asdict(obj)
     return obj
+
+
+def _plan_dict(plan) -> dict:
+    # dataclasses.asdict() only serializes actual fields — risk_per_unit,
+    # reward_per_unit, and risk_reward_ratio are @property, so they'd
+    # silently vanish from the JSON without being added back explicitly.
+    d = dataclasses.asdict(plan)
+    d["risk_per_unit"] = plan.risk_per_unit
+    d["reward_per_unit"] = plan.reward_per_unit
+    d["risk_reward_ratio"] = plan.risk_reward_ratio
+    return d
+
+
+def _risk_dict(risk) -> dict:
+    d = dataclasses.asdict(risk)
+    d["status"] = risk.status  # same @property gap as _plan_dict
+    return d
+
+
+def _memo_dict(memo) -> dict:
+    return {
+        "symbol": memo.symbol,
+        "scan": _to_dict(memo.scan),
+        "risk": _risk_dict(memo.risk),
+        "plan": _plan_dict(memo.plan),
+        "verdict": memo.verdict,
+        "reasons": memo.reasons,
+    }
 
 
 def _load_state() -> dict:
@@ -61,9 +88,8 @@ async def get_watchlist():
 
 @app.get("/api/quote/{name}")
 async def get_quote(name: str):
-    ticker = universe.resolve(name)
     try:
-        quote = await asyncio.to_thread(yahoo.get_quote, ticker)
+        quote = await asyncio.to_thread(cache.get_quote, name)
     except yahoo.DataFeedError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return _to_dict(quote)
@@ -71,9 +97,8 @@ async def get_quote(name: str):
 
 @app.get("/api/history/{name}")
 async def get_history(name: str, range: str = "10y", interval: str = "1d"):
-    ticker = universe.resolve(name)
     try:
-        bars = await asyncio.to_thread(cache.get_history, ticker, range, interval)
+        bars = await asyncio.to_thread(cache.get_history, name, range, interval)
     except yahoo.DataFeedError as e:
         raise HTTPException(status_code=502, detail=str(e))
     if not bars:
@@ -89,9 +114,8 @@ async def get_optimize(method: str = "hrp"):
     bars_by_symbol = {}
     failed = []
     for name in universe.DEFAULT_WATCHLIST:
-        ticker = universe.resolve(name)
         try:
-            bars_by_symbol[name] = await asyncio.to_thread(cache.get_history, ticker, "10y", "1d")
+            bars_by_symbol[name] = await asyncio.to_thread(cache.get_history, name, "10y", "1d")
         except yahoo.DataFeedError:
             failed.append(name)
     if len(bars_by_symbol) < 2:
@@ -99,7 +123,10 @@ async def get_optimize(method: str = "hrp"):
     returns = optimize_engine.returns_from_bars(bars_by_symbol)
     if len(returns) < 30:
         raise HTTPException(status_code=422, detail="Not enough overlapping history yet to optimize")
-    result = optimize_engine.optimize(returns, method=method)
+    try:
+        result = optimize_engine.optimize(returns, method=method)
+    except Exception as e:  # noqa: BLE001 - skfolio can raise on a near-singular/degenerate correlation structure
+        raise HTTPException(status_code=422, detail=f"Optimizer failed on this data ({e}) — try the other method")
     return {**_to_dict(result), "skipped_symbols": failed}
 
 
@@ -108,9 +135,8 @@ async def get_optimize(method: str = "hrp"):
 
 @app.get("/api/forecast/baseline/{name}")
 async def get_forecast_baseline(name: str, horizon: int = 10):
-    ticker = universe.resolve(name)
     try:
-        bars = await asyncio.to_thread(cache.get_history, ticker, "10y", "1d")
+        bars = await asyncio.to_thread(cache.get_history, name, "10y", "1d")
     except yahoo.DataFeedError as e:
         raise HTTPException(status_code=502, detail=str(e))
     try:
@@ -124,9 +150,8 @@ async def get_forecast_baseline(name: str, horizon: int = 10):
 async def get_forecast_kronos(name: str, horizon: int = 10):
     from ..forecast import kronos_adapter  # imported lazily: importing pulls in torch, which is slow
 
-    ticker = universe.resolve(name)
     try:
-        bars = await asyncio.to_thread(cache.get_history, ticker, "10y", "1d")
+        bars = await asyncio.to_thread(cache.get_history, name, "10y", "1d")
     except yahoo.DataFeedError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -154,9 +179,8 @@ async def get_forecast_kronos(name: str, horizon: int = 10):
 
 @app.get("/api/scan/{name}")
 async def get_scan(name: str):
-    ticker = universe.resolve(name)
     try:
-        bars = await asyncio.to_thread(cache.get_history, ticker, "10y", "1d")
+        bars = await asyncio.to_thread(cache.get_history, name, "10y", "1d")
     except yahoo.DataFeedError as e:
         raise HTTPException(status_code=502, detail=str(e))
     try:
@@ -187,40 +211,54 @@ async def post_state(payload: dict):
 
 @app.get("/api/decision/{name}")
 async def get_decision(name: str):
-    ticker = universe.resolve(name)
     try:
-        bars = await asyncio.to_thread(cache.get_history, ticker, "10y", "1d")
+        bars = await asyncio.to_thread(cache.get_history, name, "10y", "1d")
     except yahoo.DataFeedError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    try:
-        scan_result = scanner.scan(bars, name)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-
-    swing_window = bars[-scanner.SWING_LOOKBACK - 1 : -1]
-    swing_low = min(b.low for b in swing_window)
-    swing_high = max(b.high for b in swing_window)
-    plan = decision_memo.build_trade_plan(scan_result, swing_low, swing_high)
 
     state = _load_state()
-    closes = [b.close for b in bars[-60:]]
-    recent_returns = [(closes[i] / closes[i - 1]) - 1.0 for i in range(1, len(closes))]
+    try:
+        result = decision_memo.decide_for_symbol(
+            name, bars, state["equity"], state["peak_equity"], state["realized_pnl_today"]
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return _memo_dict(result)
 
-    # Size the position so risking the stop distance costs exactly 1% of equity —
-    # the same rule taught in the journal — then price the resulting notional.
-    risk_budget = state["equity"] * 0.01
-    units = risk_budget / plan.risk_per_unit if plan.risk_per_unit > 0 else 0.0
-    risk_result = risk_engine.assess_trade(
-        equity=state["equity"],
-        peak_equity=state["peak_equity"],
-        proposed_risk_dollars=risk_budget,
-        proposed_notional=plan.entry * units,
-        realized_pnl_today=state["realized_pnl_today"],
-        recent_returns=recent_returns,
+
+@app.get("/api/fund")
+async def get_fund():
+    """The "private hedge fund" view: run scan -> risk -> decide across the
+    whole watchlist at once, then suggest how to split capital across
+    whatever cleared the bar. Reuses decide_for_symbol per name — nothing
+    new to get wrong here, just aurum.fund.engine orchestrating the pieces
+    that already exist."""
+    from ..fund.engine import scan_watchlist
+
+    state = _load_state()
+    bars_by_symbol = {}
+    fetch_errors = {}
+    for name in universe.DEFAULT_WATCHLIST:
+        try:
+            bars_by_symbol[name] = await asyncio.to_thread(cache.get_history, name, "10y", "1d")
+        except yahoo.DataFeedError as e:
+            fetch_errors[name] = str(e)
+
+    report = await asyncio.to_thread(
+        scan_watchlist, bars_by_symbol, state["equity"], state["peak_equity"], state["realized_pnl_today"]
     )
 
-    result = decision_memo.build_memo(name, scan_result, risk_result, plan)
-    return _to_dict(result)
+    entries = [
+        {"symbol": e.symbol, "memo": _memo_dict(e.memo) if e.memo else None, "error": e.error} for e in report.entries
+    ]
+    entries += [{"symbol": name, "memo": None, "error": err} for name, err in fetch_errors.items()]
+
+    return {
+        "entries": entries,
+        "allocation": _to_dict(report.allocation) if report.allocation else None,
+        "approved_symbols": report.approved_symbols,
+        "watchlist_symbols": report.watchlist_symbols,
+    }
 
 
 # ---- backtest -----------------------------------------------------------------
@@ -230,9 +268,8 @@ async def get_decision(name: str):
 async def get_backtest(name: str, cash: float = 3000.0):
     from strategies.trend_pullback import TrendPullbackStrategy  # noqa: E402 - path wired by backtest.adapter import above
 
-    ticker = universe.resolve(name)
     try:
-        bars = await asyncio.to_thread(cache.get_history, ticker, "10y", "1d")
+        bars = await asyncio.to_thread(cache.get_history, name, "10y", "1d")
     except yahoo.DataFeedError as e:
         raise HTTPException(status_code=502, detail=str(e))
 

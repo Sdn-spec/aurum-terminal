@@ -7,6 +7,7 @@ this is testing that the UI wiring doesn't crash, not that Yahoo is up.
 
 import sys
 import unittest
+import zlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,7 +20,7 @@ from aurum.terminal.app import Aurum
 def _fake_history(symbol, range_="10y", interval="1d"):
     import random
 
-    rng = random.Random(hash(symbol) % (2**32))
+    rng = random.Random(zlib.crc32(symbol.encode()))
     bars, price, ts = [], 100.0, 1_700_000_000
     for _ in range(400):
         o = price
@@ -61,8 +62,15 @@ class TestTerminalApp(unittest.IsolatedAsyncioTestCase):
             async with app.run_test() as pilot:
                 await pilot.pause()
                 await pilot.press("b")
-                await pilot.pause(0.3)
-                body_text = str(app.query_one("#side-body").render())
+                # The backtest runs in a background worker (asyncio.to_thread); under
+                # heavy concurrent load a fixed pause can end before it finishes, so
+                # poll instead of guessing a single sleep duration.
+                body_text = ""
+                for _ in range(20):
+                    await pilot.pause(0.2)
+                    body_text = str(app.query_one("#side-body").render())
+                    if "Starting equity" in body_text:
+                        break
                 self.assertIn("Starting equity", body_text)
 
     async def test_forecast_panel_runs_without_crashing(self):

@@ -308,6 +308,57 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// ---- fund (whole-watchlist scan + allocation) --------------------------------
+
+document.getElementById("run-fund").addEventListener("click", async () => {
+  const summary = document.getElementById("fund-summary");
+  const table = document.getElementById("fund-table");
+  const body = document.getElementById("fund-body");
+  summary.textContent = "Scanning the whole watchlist… (reuses cached history where possible, so this is usually quick)";
+  table.hidden = true;
+
+  try {
+    const r = await getJSON("/api/fund");
+    const alloc = r.allocation ? r.allocation.weights : {};
+
+    body.innerHTML = r.entries
+      .map((e) => {
+        if (e.error) {
+          return `<tr><td>${e.symbol}</td><td colspan="5" class="muted">${escapeHtml(e.error)}</td></tr>`;
+        }
+        const m = e.memo;
+        const weight = alloc[e.symbol];
+        return (
+          `<tr><td>${e.symbol}</td><td>${m.scan.pattern}</td>` +
+          `<td class="c-num">${m.scan.score_pct.toFixed(0)}%</td>` +
+          `<td><span class="verdict-pill verdict-${m.verdict}">${m.verdict}</span></td>` +
+          `<td class="c-num">${m.plan.risk_reward_ratio.toFixed(2)}</td>` +
+          `<td class="c-num">${weight !== undefined ? (weight * 100).toFixed(1) + "%" : "—"}</td></tr>`
+        );
+      })
+      .join("");
+    table.hidden = false;
+
+    const approvedCount = r.approved_symbols.length;
+    const watchlistCount = r.watchlist_symbols.length;
+    const lines = [
+      `${approvedCount} approved, ${watchlistCount} on watchlist, out of ${r.entries.length} scanned.`,
+    ];
+    if (r.allocation) {
+      lines.push(
+        "",
+        `Suggested split (${r.allocation.method}) across ${Object.keys(alloc).length} name(s):`,
+        `Ann. return ${fmtPct(r.allocation.expected_return_annual * 100)}  ·  Ann. vol ${(r.allocation.volatility_annual * 100).toFixed(2)}%  ·  Sharpe ${r.allocation.sharpe_ratio.toFixed(2)}`
+      );
+    } else {
+      lines.push("", "No allocation yet — fewer than 2 symbols have enough approved/scannable history.");
+    }
+    summary.textContent = lines.join("\n");
+  } catch (err) {
+    summary.textContent = "Error: " + err.message;
+  }
+});
+
 // ---- boot ---------------------------------------------------------------------
 
 loadState();
