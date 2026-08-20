@@ -1,3 +1,4 @@
+import os
 import sys
 import tempfile
 import threading
@@ -8,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from aurum.datafeed import cache, yahoo
+from aurum.datafeed import cache, provider, yahoo
 
 SAMPLE_BARS = [
     yahoo.HistoryBar(1700000000, 2400.0, 2410.0, 2395.0, 2405.0, 1000.0),
@@ -22,9 +23,20 @@ class TestCache(unittest.TestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         self._patch = patch.object(cache, "CACHE_DIR", Path(self._tmpdir.name))
         self._patch.start()
+        # cache.get_history/get_quote call provider.get_*, which falls back to
+        # Twelve Data whenever a key is configured — without isolating this, a
+        # mocked "yahoo failed" test would make a real network call using
+        # whatever key is actually sitting in data/config.json on this machine.
+        self._config_patch = patch.object(provider, "CONFIG_PATH", Path(self._tmpdir.name) / "config.json")
+        self._config_patch.start()
+        self._env_patch = patch.dict("os.environ", {}, clear=False)
+        self._env_patch.start()
+        os.environ.pop("TWELVEDATA_API_KEY", None)
 
     def tearDown(self):
         self._patch.stop()
+        self._config_patch.stop()
+        self._env_patch.stop()
         self._tmpdir.cleanup()
 
     def test_cache_miss_fetches_and_writes_file(self):

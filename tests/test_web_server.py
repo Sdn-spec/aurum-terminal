@@ -1,6 +1,7 @@
 """API-level tests for the FastAPI backend. Network calls are mocked —
 these test the web layer's wiring and error handling, not Yahoo's uptime."""
 
+import os
 import sys
 import tempfile
 import unittest
@@ -12,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi.testclient import TestClient
 
-from aurum.datafeed import cache, yahoo
+from aurum.datafeed import cache, provider, yahoo
 from aurum.web import server
 
 
@@ -45,10 +46,24 @@ class TestWebServer(unittest.TestCase):
         # the real data/cache/ directory.
         self._cache_patch = patch.object(cache, "CACHE_DIR", Path(self._tmpdir.name) / "cache")
         self._cache_patch.start()
+        # provider.get_quote/get_history fall back to Twelve Data whenever a key is
+        # configured — and once you've actually set one up in data/config.json (as
+        # intended, for real use), leaving this unpatched means "mock Yahoo failing"
+        # tests silently make a real network call instead, flaking on whatever Twelve
+        # Data happens to do at that moment. Point CONFIG_PATH at a tempdir with
+        # nothing in it and clear the env var, so these tests are deterministic
+        # regardless of what's actually configured on the machine running them.
+        self._config_patch = patch.object(provider, "CONFIG_PATH", Path(self._tmpdir.name) / "config.json")
+        self._config_patch.start()
+        self._env_patch = patch.dict("os.environ", {}, clear=False)
+        self._env_patch.start()
+        os.environ.pop("TWELVEDATA_API_KEY", None)
 
     def tearDown(self):
         self._state_patch.stop()
         self._cache_patch.stop()
+        self._config_patch.stop()
+        self._env_patch.stop()
         self._tmpdir.cleanup()
 
     def test_index_serves_html(self):
