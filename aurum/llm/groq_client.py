@@ -20,7 +20,12 @@ from ..datafeed import provider
 from ..datafeed.yahoo import DataFeedError
 
 BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+# Verified live against a real key (2026-08-20): Groq's free-tier model lineup
+# has moved on since llama-3.3-70b-versatile (a commonly-cited example
+# elsewhere, including the README that pointed here) -- that model 404s now.
+# openai/gpt-oss-120b was confirmed working, producing an accurate narrative
+# that correctly reflected the report's numbers without inventing anything.
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 
 SYSTEM_PROMPT = (
     "You are a plain-English trading-desk analyst. You're given a report that has "
@@ -113,7 +118,16 @@ def generate_narrative(report: dict, api_key: str, model: str = DEFAULT_MODEL) -
     request = urllib.request.Request(
         BASE_URL,
         data=json.dumps(payload).encode(),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            # Groq's API sits behind Cloudflare, which blocks urllib's default
+            # "Python-urllib/3.x" User-Agent as a bot signature (HTTP 403,
+            # "error code: 1010") -- caught live, against a real key. Every
+            # other provider client in this codebase already sets one of these;
+            # this one just got missed when it was written.
+            "User-Agent": "aurum-terminal/1.0",
+        },
         method="POST",
     )
     try:
