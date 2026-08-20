@@ -315,6 +315,15 @@ async function refreshWatchlistQuotes() {
         lastCell.classList.add(quote.price > prev ? "flash-up" : "flash-down");
       }
       lastQuoteValues[name] = quote.price;
+      // Bumped here, per symbol, rather than only once after the whole loop --
+      // a single stuck symbol can spend a long time inside Yahoo's own retry
+      // backoff (worst case: several failed attempts, each with its own
+      // timeout), and gating the "Live" timestamp on the entire 7-symbol batch
+      // finishing meant one slow straggler froze the indicator for everyone
+      // else too, even while their prices kept updating underneath it fine.
+      // Caught by watching the real site patiently: prices were genuinely
+      // still moving while "updated Ns ago" sat frozen for over a minute.
+      watchlistLiveAt = Date.now();
       // the symbol detail header (price, day change, stats row) rides this same
       // poll cycle, so opening a stock doesn't need a second/duplicate quote fetch
       if (selectedSymbol === name) {
@@ -327,8 +336,12 @@ async function refreshWatchlistQuotes() {
       errors++;
     }
   }
+  // if literally every symbol failed this cycle, watchlistLiveAt never got
+  // touched above -- fall back to "now" so the status line still shows
+  // something (an error, honestly timestamped) instead of staying blank,
+  // which is what renderWatchlistStatus() does when watchlistLiveAt is null
+  if (!watchlistLiveAt) watchlistLiveAt = Date.now();
   watchlistLastErrorCount = errors;
-  watchlistLiveAt = Date.now();
   renderWatchlistStatus();
   return errors;
 }
