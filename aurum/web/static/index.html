@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,680&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
   <header class="page-header">
@@ -85,7 +86,10 @@
             </div>
           </div>
         </div>
-        <div id="chart-wrap"><svg id="chart-svg" viewBox="0 0 640 220" preserveAspectRatio="xMidYMid meet"></svg></div>
+        <div id="chart-wrap">
+          <div id="chart-container"></div>
+          <div id="chart-legend" class="chart-legend" hidden></div>
+        </div>
         <p id="chart-summary" class="status-line"></p>
       </section>
 
@@ -130,7 +134,10 @@
 
       <section class="tab-panel card" id="panel-backtest">
         <div class="card-head"><h2>Trend Pullback Backtest</h2><button id="run-backtest" type="button">Run on real history</button></div>
-        <div id="backtest-chart-wrap"><svg id="backtest-svg" viewBox="0 0 640 220" preserveAspectRatio="xMidYMid meet"></svg></div>
+        <div id="backtest-chart-wrap">
+          <div id="backtest-container"></div>
+          <div id="backtest-legend" class="chart-legend" hidden></div>
+        </div>
         <div id="backtest-output" class="panel-body"></div>
       </section>
     </main>

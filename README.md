@@ -69,6 +69,18 @@ fetched, so switching timeframe doesn't touch the rest of the watchlist.
 The watchlist sidebar collapses via the arrow button next to it (state
 persists in `localStorage`) when you want the chart full-width.
 
+**The price and backtest charts run on [Lightweight Charts](https://github.com/tradingview/lightweight-charts)**
+(TradingView's free, open-source charting *library* — Apache-2.0, not their
+data or a paid product, loaded from a pinned CDN version so it never drifts
+under you) instead of the earlier hand-rolled SVG. That gets real
+scroll-to-zoom / drag-to-pan, a volume histogram under the price, a 50-EMA
+overlay computed client-side with the exact same formula the Setup Scanner's
+"Trend" check uses (so the line on the chart is the number the scanner is
+actually reading), and a crosshair readout showing O/H/L/C/volume/EMA at
+whatever bar you're hovering. Verified visually via headless-Chrome
+screenshots in both Line and Candlestick mode against real OHLCV shapes,
+not just "the library's docs say this works."
+
 ## If Yahoo is rate-limiting you (HTTP 429 / 502 errors)
 
 This happened repeatedly during development, and to a live user session too

@@ -90,6 +90,14 @@ document.getElementById("tabs").addEventListener("click", (e) => {
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b === btn));
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + btn.dataset.tab));
   positionTabUnderline(btn);
+  // Lightweight Charts sized itself against a hidden (display:none, 0x0) panel if
+  // that tab was never visited yet — ResizeObserver catches most of this, but a
+  // belt-and-suspenders resize+refit right when the tab becomes visible avoids any
+  // race between "panel just unhid" and "observer callback fires."
+  requestAnimationFrame(() => {
+    if (btn.dataset.tab === "chart") resizePriceChart();
+    if (btn.dataset.tab === "backtest") resizeBacktestChart();
+  });
 });
 window.addEventListener("resize", () => positionTabUnderline(document.querySelector("#tabs button.active")));
 
@@ -184,115 +192,74 @@ function selectSymbol(name) {
   loadChart(name);
 }
 
-// ---- chart (shared SVG line-chart renderer, with glow + draw-in animation) --
+// ---- chart (TradingView Lightweight Charts: candles, volume, EMA overlay,
+//      crosshair readout, real zoom/pan) -------------------------------------
 
-function renderLineChart(svgEl, series, { showLegend = false } = {}) {
-  // series: [{ label, color, points: [{x: unixSeconds, y: number}] }]
-  const W = 640, H = 220, padL = 56, padR = 14, padT = 16, padB = 16;
-  const plotW = W - padL - padR, plotH = H - padT - padB;
-  const allPoints = series.flatMap((s) => s.points);
-  if (!allPoints.length) { svgEl.innerHTML = ""; return; }
-  const minX = Math.min(...allPoints.map((p) => p.x)), maxX = Math.max(...allPoints.map((p) => p.x));
-  let minY = Math.min(...allPoints.map((p) => p.y)), maxY = Math.max(...allPoints.map((p) => p.y));
-  if (minY === maxY) { minY -= 1; maxY += 1; }
-  const rangeY0 = maxY - minY;
-  minY -= rangeY0 * 0.08; maxY += rangeY0 * 0.08;
-  const rangeY = maxY - minY, rangeX = maxX - minX || 1;
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
 
-  const xAt = (x) => padL + ((x - minX) / rangeX) * plotW;
-  const yAt = (y) => padT + plotH - ((y - minY) / rangeY) * plotH;
-
-  const gridSteps = [minY + rangeY * 0.15, minY + rangeY * 0.5, minY + rangeY * 0.85];
-  let svg = `<defs>
-    <linearGradient id="chartFade" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.35"/>
-      <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
-    </linearGradient>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="3.2" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-  </defs>`;
-  svg += gridSteps
-    .map((v) => {
-      const y = yAt(v).toFixed(2);
-      return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="var(--border)" stroke-width="1" />` +
-        `<text x="${padL - 8}" y="${y}" text-anchor="end" dominant-baseline="middle" font-family="var(--font-mono)" font-size="10" fill="var(--text-muted)">${fmtPlain(v)}</text>`;
-    })
-    .join("");
-
-  series.forEach((s, si) => {
-    if (!s.points.length) return;
-    const path = s.points.map((p, i) => `${i === 0 ? "M" : "L"}${xAt(p.x).toFixed(2)},${yAt(p.y).toFixed(2)}`).join(" ");
-    const last = s.points[s.points.length - 1];
-    if (si === 0) {
-      const baseline = padT + plotH;
-      const areaPath = path + ` L${xAt(last.x).toFixed(2)},${baseline} L${xAt(s.points[0].x).toFixed(2)},${baseline} Z`;
-      svg += `<path class="chart-area" d="${areaPath}" fill="url(#chartFade)" stroke="none" />`;
-    }
-    svg += `<path class="chart-line" data-series="${si}" d="${path}" fill="none" stroke="${s.color}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" ${si === 0 ? 'filter="url(#glow)"' : ""} />`;
-    svg += `<circle class="chart-endpoint" cx="${xAt(last.x).toFixed(2)}" cy="${yAt(last.y).toFixed(2)}" r="5" fill="${s.color}" stroke="var(--surface-solid)" stroke-width="2" filter="url(#glow)" />`;
-  });
-
-  if (showLegend) {
-    let lx = padL;
-    series.forEach((s) => {
-      svg += `<rect x="${lx}" y="${H - 6}" width="10" height="3" fill="${s.color}" /><text x="${lx + 14}" y="${H - 3}" font-family="var(--font-mono)" font-size="10" fill="var(--text-secondary)">${s.label}</text>`;
-      lx += 14 + s.label.length * 6 + 16;
-    });
-  }
-  svgEl.innerHTML = svg;
-
-  // set each drawn line's dash length to its own real path length so the draw-in
-  // animation traces the actual curve instead of a guessed constant.
-  svgEl.querySelectorAll(".chart-line").forEach((line) => {
-    const len = line.getTotalLength();
-    line.style.setProperty("--line-len", len);
+/** EMA(period), seeded the same way the scanner's Python EMA is (first value
+ * seeds the series) — so the line on the chart is the exact same number the
+ * Setup Scanner's "Trend" confirmation is reading. */
+function computeEMA(closes, period) {
+  const k = 2 / (period + 1);
+  let ema = null;
+  return closes.map((c) => {
+    ema = ema === null ? c : (c - ema) * k + ema;
+    return ema;
   });
 }
 
-// ---- candlestick renderer ---------------------------------------------------
+let priceChart = null, candleSeries = null, priceLineSeries = null, volumeSeries = null, emaSeries = null;
 
-function renderCandlestickChart(svgEl, bars) {
-  const W = 640, H = 220, padL = 56, padR = 14, padT = 16, padB = 16;
-  const plotW = W - padL - padR, plotH = H - padT - padB;
-  if (!bars.length) { svgEl.innerHTML = ""; return; }
+function ensurePriceChart() {
+  if (priceChart) return;
+  const container = document.getElementById("chart-container");
+  priceChart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: container.clientHeight,
+    layout: { background: { color: "transparent" }, textColor: cssVar("--text-secondary"), fontFamily: "IBM Plex Mono, monospace", fontSize: 11 },
+    grid: { vertLines: { color: cssVar("--border") }, horzLines: { color: cssVar("--border") } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: { borderColor: cssVar("--border") },
+    timeScale: { borderColor: cssVar("--border"), timeVisible: true, secondsVisible: false },
+  });
+  candleSeries = priceChart.addCandlestickSeries({
+    upColor: cssVar("--positive"), downColor: cssVar("--negative"), borderVisible: false,
+    wickUpColor: cssVar("--positive"), wickDownColor: cssVar("--negative"),
+  });
+  priceLineSeries = priceChart.addLineSeries({ color: cssVar("--accent"), lineWidth: 2, visible: false });
+  emaSeries = priceChart.addLineSeries({
+    color: cssVar("--accent-strong"), lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+  });
+  volumeSeries = priceChart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "" });
+  volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
 
-  let minY = Math.min(...bars.map((b) => b.low)), maxY = Math.max(...bars.map((b) => b.high));
-  const rangeY0 = maxY - minY || 1;
-  minY -= rangeY0 * 0.06; maxY += rangeY0 * 0.06;
-  const rangeY = maxY - minY;
-
-  const n = bars.length;
-  const xAt = (i) => padL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
-  const yAt = (y) => padT + plotH - ((y - minY) / rangeY) * plotH;
-  const slotW = plotW / n;
-  const bodyW = Math.max(1.5, Math.min(9, slotW * 0.62));
-
-  const gridSteps = [minY + rangeY * 0.15, minY + rangeY * 0.5, minY + rangeY * 0.85];
-  let svg = gridSteps
-    .map((v) => {
-      const y = yAt(v).toFixed(2);
-      return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="var(--border)" stroke-width="1" />` +
-        `<text x="${padL - 8}" y="${y}" text-anchor="end" dominant-baseline="middle" font-family="var(--font-mono)" font-size="10" fill="var(--text-muted)">${fmtPlain(v)}</text>`;
-    })
-    .join("");
-
-  bars.forEach((b, i) => {
-    const up = b.close >= b.open;
-    const cls = up ? "up" : "down";
-    const x = xAt(i);
-    const yHigh = yAt(b.high), yLow = yAt(b.low);
-    const yOpen = yAt(b.open), yClose = yAt(b.close);
-    const bodyTop = Math.min(yOpen, yClose), bodyH = Math.max(1, Math.abs(yClose - yOpen));
-    const delay = Math.min(i * 3, 500);
-    svg += `<g class="candle-group" style="animation-delay:${delay}ms">` +
-      `<line class="candle-wick ${cls}" x1="${x.toFixed(2)}" y1="${yHigh.toFixed(2)}" x2="${x.toFixed(2)}" y2="${yLow.toFixed(2)}" />` +
-      `<rect class="candle-body candle-${cls}" x="${(x - bodyW / 2).toFixed(2)}" y="${bodyTop.toFixed(2)}" width="${bodyW.toFixed(2)}" height="${bodyH.toFixed(2)}" rx="0.6" />` +
-      `</g>`;
+  const legend = document.getElementById("chart-legend");
+  priceChart.subscribeCrosshairMove((param) => {
+    const candle = param.time ? param.seriesData.get(candleSeries) : null;
+    if (!candle) { legend.hidden = true; return; }
+    const vol = param.seriesData.get(volumeSeries);
+    const ema = param.seriesData.get(emaSeries);
+    const date = new Date(param.time * 1000);
+    const upDown = candle.close >= candle.open ? "pos" : "neg";
+    legend.innerHTML =
+      `<div>${date.toLocaleString()}</div>` +
+      `<div>O <b>${fmtPlain(candle.open)}</b>  H <b>${fmtPlain(candle.high)}</b>  L <b>${fmtPlain(candle.low)}</b>  C <b class="${upDown}">${fmtPlain(candle.close)}</b></div>` +
+      (vol ? `<div>Vol <b>${fmtPlain(vol.value)}</b></div>` : "") +
+      (ema ? `<div>50-EMA <b class="accent-ink">${fmtPlain(ema.value)}</b></div>` : "");
+    legend.hidden = false;
   });
 
-  svgEl.innerHTML = svg;
+  new ResizeObserver(resizePriceChart).observe(container);
+}
+
+function resizePriceChart() {
+  if (!priceChart) return;
+  const c = document.getElementById("chart-container");
+  if (!c.clientWidth || !c.clientHeight) return;
+  priceChart.applyOptions({ width: c.clientWidth, height: c.clientHeight });
 }
 
 // ---- chart state + loading ---------------------------------------------------
@@ -303,6 +270,7 @@ const TIMEFRAMES = {
   "1d": { range: "10y", interval: "1d" },
 };
 const CHART_DISPLAY_BARS = 150;
+const EMA_PERIOD = 50;
 // Read the starting state from whichever button HTML marks active, rather than
 // hardcoding it separately — one source of truth, so the two can't desync.
 let chartTimeframe = document.querySelector("#chart-timeframe button.active")?.dataset.tf || "1d";
@@ -327,14 +295,21 @@ document.getElementById("chart-type").addEventListener("click", (e) => {
 
 function renderCurrentChart() {
   if (!currentChartBars.length) return;
+  ensurePriceChart();
   const recent = currentChartBars.slice(-CHART_DISPLAY_BARS);
-  if (chartType === "candles") {
-    renderCandlestickChart(document.getElementById("chart-svg"), recent);
-  } else {
-    renderLineChart(document.getElementById("chart-svg"), [
-      { label: currentChartName, color: "var(--accent)", points: recent.map((b) => ({ x: b.timestamp, y: b.close })) },
-    ]);
-  }
+
+  candleSeries.setData(recent.map((b) => ({ time: b.timestamp, open: b.open, high: b.high, low: b.low, close: b.close })));
+  priceLineSeries.setData(recent.map((b) => ({ time: b.timestamp, value: b.close })));
+  volumeSeries.setData(
+    recent.map((b) => ({ time: b.timestamp, value: b.volume, color: b.close >= b.open ? cssVar("--positive") : cssVar("--negative") }))
+  );
+  const emaValues = computeEMA(recent.map((b) => b.close), EMA_PERIOD);
+  emaSeries.setData(recent.map((b, i) => ({ time: b.timestamp, value: emaValues[i] })));
+
+  candleSeries.applyOptions({ visible: chartType === "candles" });
+  priceLineSeries.applyOptions({ visible: chartType === "line" });
+
+  priceChart.timeScale().fitContent();
 }
 
 async function loadChart(name) {
@@ -349,7 +324,7 @@ async function loadChart(name) {
     renderCurrentChart();
     const recent = bars.slice(-CHART_DISPLAY_BARS);
     const change = recent.length > 1 ? ((recent[recent.length - 1].close - recent[0].close) / recent[0].close) * 100 : 0;
-    summary.textContent = `${bars.length} ${chartTimeframe} bars cached · last ${recent.length} shown · ${fmtPct(change)} over that window`;
+    summary.textContent = `${bars.length} ${chartTimeframe} bars cached · last ${recent.length} shown · ${fmtPct(change)} over that window · scroll to zoom, drag to pan`;
   } catch (err) {
     currentChartBars = [];
     summary.textContent = `Could not load history: ${err.message}`;
@@ -521,6 +496,49 @@ document.getElementById("run-forecast-kronos").addEventListener("click", async (
   }
 });
 
+// ---- backtest chart (Lightweight Charts, same engine as the price chart) ----
+
+let backtestChart = null, strategySeries = null, buyHoldSeries = null;
+
+function ensureBacktestChart() {
+  if (backtestChart) return;
+  const container = document.getElementById("backtest-container");
+  backtestChart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: container.clientHeight,
+    layout: { background: { color: "transparent" }, textColor: cssVar("--text-secondary"), fontFamily: "IBM Plex Mono, monospace", fontSize: 11 },
+    grid: { vertLines: { color: cssVar("--border") }, horzLines: { color: cssVar("--border") } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: { borderColor: cssVar("--border") },
+    timeScale: { borderColor: cssVar("--border"), timeVisible: true, secondsVisible: false },
+  });
+  strategySeries = backtestChart.addLineSeries({ color: cssVar("--accent"), lineWidth: 2 });
+  buyHoldSeries = backtestChart.addLineSeries({ color: cssVar("--text-muted"), lineWidth: 2 });
+
+  const legend = document.getElementById("backtest-legend");
+  backtestChart.subscribeCrosshairMove((param) => {
+    if (!param.time) { legend.hidden = true; return; }
+    const s = param.seriesData.get(strategySeries);
+    const b = param.seriesData.get(buyHoldSeries);
+    if (!s && !b) { legend.hidden = true; return; }
+    const date = new Date(param.time * 1000);
+    legend.innerHTML =
+      `<div>${date.toLocaleDateString()}</div>` +
+      (s ? `<div><span class="accent-ink">Strategy</span> <b>${fmtMoney(s.value)}</b></div>` : "") +
+      (b ? `<div>Buy &amp; hold <b>${fmtMoney(b.value)}</b></div>` : "");
+    legend.hidden = false;
+  });
+
+  new ResizeObserver(resizeBacktestChart).observe(container);
+}
+
+function resizeBacktestChart() {
+  if (!backtestChart) return;
+  const c = document.getElementById("backtest-container");
+  if (!c.clientWidth || !c.clientHeight) return;
+  backtestChart.applyOptions({ width: c.clientWidth, height: c.clientHeight });
+}
+
 // ---- backtest -----------------------------------------------------------------
 
 document.getElementById("run-backtest").addEventListener("click", async () => {
@@ -529,14 +547,10 @@ document.getElementById("run-backtest").addEventListener("click", async () => {
   out.innerHTML = loadingHtml("Running backtest on real history…");
   try {
     const r = await getJSON(`/api/backtest/${selectedSymbol}`);
-    renderLineChart(
-      document.getElementById("backtest-svg"),
-      [
-        { label: "Strategy", color: "var(--accent)", points: r.strategy_equity_curve.map((p) => ({ x: p.timestamp, y: p.equity })) },
-        { label: "Buy & hold", color: "var(--text-muted)", points: r.buy_hold_equity_curve.map((p) => ({ x: p.timestamp, y: p.equity })) },
-      ],
-      { showLegend: true }
-    );
+    ensureBacktestChart();
+    strategySeries.setData(r.strategy_equity_curve.map((p) => ({ time: p.timestamp, value: p.equity })));
+    buyHoldSeries.setData(r.buy_hold_equity_curve.map((p) => ({ time: p.timestamp, value: p.equity })));
+    backtestChart.timeScale().fitContent();
     const s = r.stats;
     out.innerHTML =
       `Data: ${r.bar_count} real daily bars\n\n` +

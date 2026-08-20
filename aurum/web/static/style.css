@@ -290,22 +290,22 @@ th.c-num { text-align: right; }
 }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-/* ---- chart ---- */
-#chart-wrap, #backtest-chart-wrap { position: relative; width: 100%; }
-#chart-svg, #backtest-svg { width: 100%; height: auto; display: block; overflow: visible; }
-.chart-line { stroke-dasharray: var(--line-len, 1000); stroke-dashoffset: var(--line-len, 1000); animation: drawLine 1.1s var(--ease-out) forwards; }
-@keyframes drawLine { to { stroke-dashoffset: 0; } }
-.chart-area { opacity: 0; animation: fadeIn 0.8s 0.5s var(--ease-out) forwards; }
-.chart-endpoint { opacity: 0; animation: popIn 0.4s 1.0s var(--ease-out) forwards; transform-origin: center; }
-@keyframes popIn { from { opacity: 0; transform: scale(0); } to { opacity: 1; transform: scale(1); } }
+/* ---- chart (TradingView Lightweight Charts, canvas-rendered) ---- */
+#chart-wrap, #backtest-chart-wrap { position: relative; width: 100%; animation: fadeIn 0.4s var(--ease-out) both; }
+#chart-container { width: 100%; height: 340px; }
+#backtest-container { width: 100%; height: 260px; }
+#chart-container > div, #backtest-container > div { border-radius: 8px; overflow: hidden; }
 
-.candle-wick { stroke-width: 1.2; }
-.candle-body { stroke: none; }
-.candle-up { fill: var(--positive); }
-.candle-down { fill: var(--negative); }
-.candle-wick.up { stroke: var(--positive); }
-.candle-wick.down { stroke: var(--negative); }
-.candle-group { opacity: 0; animation: fadeIn 0.4s var(--ease-out) forwards; transform-origin: bottom; }
+.chart-legend {
+  position: absolute; top: 4px; left: 4px; z-index: 3; pointer-events: none;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 11px; font-family: var(--font-mono); font-size: 0.74rem; line-height: 1.55;
+  color: var(--text-secondary); backdrop-filter: blur(8px); box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+}
+.chart-legend b { color: var(--text-primary); }
+.chart-legend .pos { color: var(--positive); }
+.chart-legend .neg { color: var(--negative); }
+.chart-legend .accent-ink { color: var(--accent-strong); }
 
 /* ---- panel bodies / verdicts / gauges ---- */
 .panel-body { font-family: var(--font-mono); font-size: 0.86rem; white-space: pre-wrap; color: var(--text-secondary); line-height: 1.65; }
