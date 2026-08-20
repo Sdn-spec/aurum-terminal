@@ -139,13 +139,48 @@ document.getElementById("account-form").addEventListener("submit", async (e) => 
   });
 });
 
-// ---- watchlist ----------------------------------------------------------
+// ---- watchlist (auto-refreshing: quotes re-poll on their own, no manual
+//      click required — see startLiveWatchlistLoop below) --------------------
 
-async function loadWatchlist() {
+const WATCHLIST_AUTO_REFRESH_INTERVAL_MS = 45000; // matches the server's quote cache TTL, so this never asks Yahoo for anything fresher than it's already willing to serve
+let watchlistDefs = []; // {name, ticker}[] — fetched once, quotes re-poll against this
+let watchlistLiveAt = null;
+let watchlistLastErrorCount = 0;
+
+/** Resolves immediately if the tab is visible, otherwise waits for it to
+ * become visible again — used to pause live polling while the tab is in the
+ * background instead of burning requests nobody's looking at. */
+function waitForVisible() {
+  if (document.visibilityState === "visible") return Promise.resolve();
+  return new Promise((resolve) => {
+    function onChange() {
+      if (document.visibilityState === "visible") {
+        document.removeEventListener("visibilitychange", onChange);
+        resolve();
+      }
+    }
+    document.addEventListener("visibilitychange", onChange);
+  });
+}
+
+function renderWatchlistStatus() {
   const status = document.getElementById("watchlist-status");
+  if (!status) return;
+  if (watchlistLastErrorCount > 0) {
+    status.innerHTML = `<span class="live-dot error"></span>${watchlistLastErrorCount} error(s) — Yahoo may be rate-limiting; retrying automatically.`;
+    status.classList.add("error");
+    return;
+  }
+  if (!watchlistLiveAt) return;
+  const secs = Math.max(0, Math.round((Date.now() - watchlistLiveAt) / 1000));
+  status.innerHTML = `<span class="live-dot"></span>Live · updated ${secs}s ago`;
+  status.classList.remove("error");
+}
+
+async function buildWatchlistRows() {
   const body = document.getElementById("watchlist-body");
-  const watchlist = await getJSON("/api/watchlist");
-  body.innerHTML = watchlist
+  watchlistDefs = await getJSON("/api/watchlist");
+  body.innerHTML = watchlistDefs
     .map(
       (w, i) =>
         `<tr class="watch-row" data-name="${w.name}" style="animation-delay:${i * 45}ms"><td><div class="sym-cell">${iconFor(w.name)}<span>${w.name}</span></div></td><td>${w.ticker}</td>` +
@@ -153,12 +188,16 @@ async function loadWatchlist() {
     )
     .join("");
   body.querySelectorAll("tr").forEach((row) => row.addEventListener("click", () => selectSymbol(row.dataset.name)));
+}
 
+async function refreshWatchlistQuotes() {
+  const status = document.getElementById("watchlist-status");
+  const body = document.getElementById("watchlist-body");
   let errors = 0;
-  for (let i = 0; i < watchlist.length; i++) {
+  for (let i = 0; i < watchlistDefs.length; i++) {
     if (i > 0) await sleep(WATCHLIST_ROW_DELAY_MS);
-    const { name } = watchlist[i];
-    status.innerHTML = `<span class="spinner"></span>Fetching quotes… (${i + 1}/${watchlist.length})`;
+    const { name } = watchlistDefs[i];
+    status.innerHTML = `<span class="spinner"></span>Fetching quotes… (${i + 1}/${watchlistDefs.length})`;
     status.classList.remove("error");
     try {
       const quote = await getJSON(`/api/quote/${name}`);
@@ -178,12 +217,26 @@ async function loadWatchlist() {
       errors++;
     }
   }
-  status.textContent = errors ? `Done with ${errors} error(s) — Yahoo may be rate-limiting; try Refresh again shortly.` : `Quotes updated ${new Date().toLocaleTimeString()}`;
-  status.classList.toggle("error", errors > 0);
-
-  if (!selectedSymbol && watchlist.length) selectSymbol(watchlist[0].name);
+  watchlistLastErrorCount = errors;
+  watchlistLiveAt = Date.now();
+  renderWatchlistStatus();
+  return errors;
 }
-document.getElementById("refresh-quotes").addEventListener("click", loadWatchlist);
+
+async function loadWatchlist() {
+  await buildWatchlistRows();
+  await refreshWatchlistQuotes();
+  if (!selectedSymbol && watchlistDefs.length) selectSymbol(watchlistDefs[0].name);
+}
+document.getElementById("refresh-quotes").addEventListener("click", () => refreshWatchlistQuotes());
+
+async function startLiveWatchlistLoop() {
+  while (true) {
+    await sleep(WATCHLIST_AUTO_REFRESH_INTERVAL_MS);
+    await waitForVisible();
+    await refreshWatchlistQuotes();
+  }
+}
 
 function selectSymbol(name) {
   selectedSymbol = name;
@@ -314,8 +367,25 @@ function renderCurrentChart() {
   priceChart.timeScale().fitContent();
 }
 
+const CHART_LIVE_POLL_INTERVAL_MS = 45000; // matches the server's quote cache TTL, same reasoning as the watchlist loop
+let lastChartLiveAt = null;
+let chartSummaryBaseText = "";
+
+function renderChartSummary() {
+  const summary = document.getElementById("chart-summary");
+  if (!chartSummaryBaseText) return;
+  let liveSuffix = "";
+  if (lastChartLiveAt) {
+    const secs = Math.max(0, Math.round((Date.now() - lastChartLiveAt) / 1000));
+    liveSuffix = ` · <span class="live-dot"></span>live, updated ${secs}s ago`;
+  }
+  summary.innerHTML = chartSummaryBaseText + liveSuffix;
+}
+
 async function loadChart(name) {
   currentChartName = name;
+  lastChartLiveAt = null;
+  chartSummaryBaseText = "";
   const summary = document.getElementById("chart-summary");
   summary.innerHTML = loadingHtml("Loading…");
   summary.classList.remove("error");
@@ -326,11 +396,46 @@ async function loadChart(name) {
     renderCurrentChart();
     const recent = bars.slice(-CHART_DISPLAY_BARS);
     const change = recent.length > 1 ? ((recent[recent.length - 1].close - recent[0].close) / recent[0].close) * 100 : 0;
-    summary.textContent = `${bars.length} ${chartTimeframe} bars cached · last ${recent.length} shown · ${fmtPct(change)} over that window · scroll to zoom, drag to pan`;
+    chartSummaryBaseText = `${bars.length} ${chartTimeframe} bars cached · last ${recent.length} shown · ${fmtPct(change)} over that window · scroll to zoom, drag to pan`;
+    renderChartSummary();
   } catch (err) {
     currentChartBars = [];
     summary.textContent = `Could not load history: ${err.message}`;
     summary.classList.add("error");
+  }
+}
+
+/** Pulls the latest quote for the symbol currently on screen and pushes it
+ * into the existing last bar via series.update() — a single cheap request
+ * that keeps the chart ticking without refetching the whole history. */
+async function updateLiveChartPoint(name) {
+  if (!priceChart || !currentChartBars.length) return;
+  let quote;
+  try {
+    quote = await getJSON(`/api/quote/${name}`);
+  } catch (err) {
+    return; // a single missed live tick isn't worth surfacing as an error
+  }
+  if (name !== currentChartName || !currentChartBars.length) return;
+  const bars = currentChartBars;
+  const last = bars[bars.length - 1];
+  const updated = { ...last, close: quote.price, high: Math.max(last.high, quote.price), low: Math.min(last.low, quote.price) };
+  bars[bars.length - 1] = updated;
+  candleSeries.update({ time: updated.timestamp, open: updated.open, high: updated.high, low: updated.low, close: updated.close });
+  priceLineSeries.update({ time: updated.timestamp, value: updated.close });
+  volumeSeries.update({ time: updated.timestamp, value: updated.volume, color: updated.close >= updated.open ? cssVar("--positive") : cssVar("--negative") });
+  const recent = bars.slice(-CHART_DISPLAY_BARS);
+  const emaValues = computeEMA(recent.map((b) => b.close), EMA_PERIOD);
+  emaSeries.update({ time: updated.timestamp, value: emaValues[emaValues.length - 1] });
+  lastChartLiveAt = Date.now();
+  renderChartSummary();
+}
+
+async function startLiveChartLoop() {
+  while (true) {
+    await sleep(CHART_LIVE_POLL_INTERVAL_MS);
+    await waitForVisible();
+    if (currentChartName) await updateLiveChartPoint(currentChartName);
   }
 }
 
@@ -707,5 +812,7 @@ document.getElementById("run-fund").addEventListener("click", async () => {
 // ---- boot ---------------------------------------------------------------------
 
 loadState();
-loadWatchlist();
+loadWatchlist().then(startLiveWatchlistLoop);
+startLiveChartLoop();
+setInterval(() => { renderWatchlistStatus(); renderChartSummary(); }, 1000); // ticks the "updated Ns ago" text between real polls
 requestAnimationFrame(() => positionTabUnderline(document.querySelector("#tabs button.active")));
