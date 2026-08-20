@@ -125,7 +125,13 @@ document.getElementById("account-form").addEventListener("submit", async (e) => 
 // ---- watchlist (auto-refreshing: quotes re-poll on their own, no manual
 //      click required — see startLiveWatchlistLoop below) --------------------
 
-const WATCHLIST_AUTO_REFRESH_INTERVAL_MS = 45000; // matches the server's quote cache TTL, so this never asks Yahoo for anything fresher than it's already willing to serve
+// Shorter than the server's 45s quote cache TTL on purpose: polling more often
+// than the cache refreshes doesn't cost anything extra against Yahoo (most of
+// these ticks just re-serve the same cached value), but it does mean a price
+// that genuinely changed server-side shows up here within ~15s instead of
+// waiting up to 45s for the next cycle -- the gap between "the data is fresh"
+// and "the screen shows it," not real request volume, is what this shortens.
+const WATCHLIST_AUTO_REFRESH_INTERVAL_MS = 15000;
 let watchlistDefs = []; // {name, ticker}[] — fetched once, quotes re-poll against this
 let watchlistLiveAt = null;
 let watchlistLastErrorCount = 0;
@@ -435,12 +441,20 @@ let currentSymbolQuote = null;
 let currentSymbolFundamentals = null;
 let currentSymbolEarnings = null;
 
+let lastSymbolHeaderPrice = null;
+
 function renderSymbolHeaderPrice(quote) {
   const priceEl = document.getElementById("symbol-price");
   const changeEl = document.getElementById("symbol-change");
   const asOfEl = document.getElementById("symbol-asof");
   if (!priceEl) return;
   priceEl.textContent = fmtPlain(quote.price);
+  if (lastSymbolHeaderPrice !== null && lastSymbolHeaderPrice !== quote.price) {
+    priceEl.classList.remove("flash-up", "flash-down");
+    void priceEl.offsetWidth; // restart animation
+    priceEl.classList.add(quote.price > lastSymbolHeaderPrice ? "flash-up" : "flash-down");
+  }
+  lastSymbolHeaderPrice = quote.price;
   if (changeEl) {
     if (quote.previous_close) {
       const change = quote.price - quote.previous_close;
@@ -509,9 +523,11 @@ function openSymbol(name) {
   document.getElementById("symbol-change").textContent = "";
   document.getElementById("symbol-asof").textContent = "";
   document.getElementById("symbol-verdict").innerHTML = "";
+  document.getElementById("symbol-price").classList.remove("flash-up", "flash-down");
   currentSymbolQuote = null;
   currentSymbolFundamentals = null;
   currentSymbolEarnings = null;
+  lastSymbolHeaderPrice = null;
   renderSymbolStats();
 
   loadChart(name);
@@ -661,7 +677,7 @@ function renderCurrentChart() {
   priceChart.timeScale().fitContent();
 }
 
-const CHART_LIVE_POLL_INTERVAL_MS = 45000; // matches the server's quote cache TTL, same reasoning as the watchlist loop
+const CHART_LIVE_POLL_INTERVAL_MS = 15000; // same reasoning as WATCHLIST_AUTO_REFRESH_INTERVAL_MS above
 let lastChartLiveAt = null;
 let chartSummaryBaseText = "";
 
