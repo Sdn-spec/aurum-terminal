@@ -64,6 +64,8 @@ class TestTwelveData(unittest.TestCase):
         self.assertEqual(quote.day_high, 2072.30)
         self.assertEqual(quote.fifty_two_week_low, 1804.40)
         self.assertEqual(quote.currency, "USD")
+        self.assertEqual(quote.previous_close, 2071.90)
+        self.assertEqual(quote.open, 2062.90)
 
     def test_get_history_parses_and_sorts_ascending(self):
         with patch("urllib.request.urlopen", return_value=_FakeResponse(SAMPLE_TIME_SERIES_RESPONSE)):

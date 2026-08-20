@@ -80,6 +80,9 @@ def get_quote(symbol: str, api_key: str) -> Quote:
         currency=data.get("currency", ""),
         exchange=data.get("exchange", ""),
         market_time=int(data.get("timestamp", 0) or 0),
+        previous_close=float(data.get("previous_close", 0) or 0),
+        open=float(data.get("open", 0) or 0),
+        volume=float(data.get("volume", 0) or 0),
     )
 
 

@@ -309,11 +309,12 @@ async function refreshWatchlistQuotes() {
         lastCell.classList.add(quote.price > prev ? "flash-up" : "flash-down");
       }
       lastQuoteValues[name] = quote.price;
-      // the symbol detail header shows its own live price off this same poll
-      // cycle, so opening a stock doesn't need a second/duplicate quote fetch
+      // the symbol detail header (price, day change, stats row) rides this same
+      // poll cycle, so opening a stock doesn't need a second/duplicate quote fetch
       if (selectedSymbol === name) {
-        const priceEl = document.getElementById("symbol-price");
-        if (priceEl) priceEl.textContent = fmtPlain(quote.price);
+        currentSymbolQuote = quote;
+        renderSymbolHeaderPrice(quote);
+        renderSymbolStats();
       }
       await checkPriceAlerts(name, quote.price);
     } catch (err) {
@@ -425,6 +426,74 @@ async function startLiveWatchlistLoop() {
   }
 }
 
+// ---- symbol header: price, day change, "as of", and a dense key-stats row ---
+// (quote fields -> Previous close/Open/Day's range/52wk range/Volume; the rest
+// -- Market cap/P:E/EPS/Beta/Dividend/Earnings -- arrive later from Analyze,
+// so the grid re-renders from whichever pieces have loaded so far.)
+
+let currentSymbolQuote = null;
+let currentSymbolFundamentals = null;
+let currentSymbolEarnings = null;
+
+function renderSymbolHeaderPrice(quote) {
+  const priceEl = document.getElementById("symbol-price");
+  const changeEl = document.getElementById("symbol-change");
+  const asOfEl = document.getElementById("symbol-asof");
+  if (!priceEl) return;
+  priceEl.textContent = fmtPlain(quote.price);
+  if (changeEl) {
+    if (quote.previous_close) {
+      const change = quote.price - quote.previous_close;
+      const changePct = (change / quote.previous_close) * 100;
+      changeEl.className = change >= 0 ? "pos" : "neg";
+      changeEl.textContent = `${fmtMoney(change)} (${fmtPct(changePct)})`;
+    } else {
+      changeEl.textContent = "";
+    }
+  }
+  if (asOfEl) {
+    asOfEl.textContent = quote.market_time ? "As of " + new Date(quote.market_time * 1000).toLocaleString() : "";
+  }
+}
+
+function renderSymbolStats() {
+  const out = document.getElementById("symbol-stats");
+  if (!out) return;
+  const q = currentSymbolQuote, f = currentSymbolFundamentals, e = currentSymbolEarnings;
+  const stats = [];
+  if (q) {
+    stats.push(["Previous close", fmtPlain(q.previous_close)]);
+    stats.push(["Open", fmtPlain(q.open)]);
+    stats.push(["Day's range", `${fmtPlain(q.day_low)} – ${fmtPlain(q.day_high)}`]);
+    stats.push(["52 week range", `${fmtPlain(q.fifty_two_week_low)} – ${fmtPlain(q.fifty_two_week_high)}`]);
+    stats.push(["Volume", q.volume ? Math.round(q.volume).toLocaleString() : "—"]);
+  }
+  if (f) {
+    stats.push(["Market cap", fmtMarketCap(f.market_cap_millions)]);
+    stats.push(["P/E (TTM)", f.pe_ttm !== null && f.pe_ttm !== undefined ? f.pe_ttm.toFixed(2) : "—"]);
+    stats.push(["EPS (TTM)", f.eps_ttm !== null && f.eps_ttm !== undefined ? fmtPlain(f.eps_ttm) : "—"]);
+    stats.push(["Beta", f.beta !== null && f.beta !== undefined ? f.beta.toFixed(2) : "—"]);
+    stats.push(["Dividend yield", f.dividend_yield_pct !== null && f.dividend_yield_pct !== undefined ? f.dividend_yield_pct.toFixed(2) + "%" : "—"]);
+  }
+  if (e) stats.push(["Earnings date", e.date]);
+  out.innerHTML = stats
+    .map(([label, value]) => `<div class="symbol-stat"><div class="symbol-stat-label">${escapeHtml(label)}</div><div class="symbol-stat-value">${escapeHtml(String(value))}</div></div>`)
+    .join("");
+}
+
+async function loadSymbolQuote(name) {
+  try {
+    const quote = await getJSON(`/api/quote/${name}`);
+    if (selectedSymbol !== name) return; // navigated away before this resolved
+    currentSymbolQuote = quote;
+    renderSymbolHeaderPrice(quote);
+    renderSymbolStats();
+  } catch (err) {
+    // the header just stays at "—" -- not worth a scary error banner for one field,
+    // and the live watchlist poll will fill it in on its next cycle regardless
+  }
+}
+
 /** The whole point of this app's shape: click one stock, see everything.
  * Every panel below loads concurrently (none of these calls are awaited
  * here) rather than waiting on each other, and each one is a small,
@@ -437,9 +506,16 @@ function openSymbol(name) {
   document.getElementById("symbol-icon").innerHTML = iconFor(name);
   document.getElementById("symbol-title").textContent = name;
   document.getElementById("symbol-price").textContent = lastQuoteValues[name] !== undefined ? fmtPlain(lastQuoteValues[name]) : "—";
+  document.getElementById("symbol-change").textContent = "";
+  document.getElementById("symbol-asof").textContent = "";
   document.getElementById("symbol-verdict").innerHTML = "";
+  currentSymbolQuote = null;
+  currentSymbolFundamentals = null;
+  currentSymbolEarnings = null;
+  renderSymbolStats();
 
   loadChart(name);
+  loadSymbolQuote(name);
   runScanner(name);
   runAnalyze(name);
   runDecision(name);
@@ -466,7 +542,7 @@ function computeEMA(closes, period) {
   });
 }
 
-let priceChart = null, candleSeries = null, priceLineSeries = null, volumeSeries = null, emaSeries = null;
+let priceChart = null, candleSeries = null, priceLineSeries = null, baselineSeries = null, volumeSeries = null, emaSeries = null;
 
 function ensurePriceChart() {
   if (priceChart) return;
@@ -485,6 +561,20 @@ function ensurePriceChart() {
     wickUpColor: cssVar("--positive"), wickDownColor: cssVar("--negative"),
   });
   priceLineSeries = priceChart.addLineSeries({ color: cssVar("--accent"), lineWidth: 2, visible: false });
+  // colored relative to the visible window's own opening price -- green above,
+  // red below, filled -- the "is this period up or down" read Google Finance's
+  // own quote page uses, which is what this chart type is styled after.
+  // Lightweight Charts computes the fill gradient across the whole visible
+  // price range of the pane, not just the local gap between the line and the
+  // baseline -- for an instrument whose swings are small relative to that
+  // full range, a gradient fading to transparent only ever shows its faint
+  // end. Using the same color for both stops (an effectively solid fill)
+  // sidesteps that instead of depending on how much of the pane the data fills.
+  baselineSeries = priceChart.addBaselineSeries({
+    topLineColor: cssVar("--positive"), topFillColor1: cssVar("--positive-area-fill"), topFillColor2: cssVar("--positive-area-fill"),
+    bottomLineColor: cssVar("--negative"), bottomFillColor1: cssVar("--negative-area-fill"), bottomFillColor2: cssVar("--negative-area-fill"),
+    lineWidth: 2, visible: false,
+  });
   emaSeries = priceChart.addLineSeries({
     color: cssVar("--accent-strong"), lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
   });
@@ -555,6 +645,9 @@ function renderCurrentChart() {
 
   candleSeries.setData(recent.map((b) => ({ time: b.timestamp, open: b.open, high: b.high, low: b.low, close: b.close })));
   priceLineSeries.setData(recent.map((b) => ({ time: b.timestamp, value: b.close })));
+  const baselineData = recent.map((b) => ({ time: b.timestamp, value: b.close }));
+  baselineSeries.applyOptions({ baseValue: { type: "price", price: recent[0].close } });
+  baselineSeries.setData(baselineData);
   volumeSeries.setData(
     recent.map((b) => ({ time: b.timestamp, value: b.volume, color: b.close >= b.open ? cssVar("--positive") : cssVar("--negative") }))
   );
@@ -563,6 +656,7 @@ function renderCurrentChart() {
 
   candleSeries.applyOptions({ visible: chartType === "candles" });
   priceLineSeries.applyOptions({ visible: chartType === "line" });
+  baselineSeries.applyOptions({ visible: chartType === "area" });
 
   priceChart.timeScale().fitContent();
 }
@@ -623,6 +717,7 @@ async function updateLiveChartPoint(name) {
   bars[bars.length - 1] = updated;
   candleSeries.update({ time: updated.timestamp, open: updated.open, high: updated.high, low: updated.low, close: updated.close });
   priceLineSeries.update({ time: updated.timestamp, value: updated.close });
+  baselineSeries.update({ time: updated.timestamp, value: updated.close });
   volumeSeries.update({ time: updated.timestamp, value: updated.volume, color: updated.close >= updated.open ? cssVar("--positive") : cssVar("--negative") });
   const recent = bars.slice(-CHART_DISPLAY_BARS);
   const emaValues = computeEMA(recent.map((b) => b.close), EMA_PERIOD);
@@ -848,6 +943,9 @@ async function runAnalyze(name) {
     renderAnalysis(r);
     if (selectedSymbol === name) {
       document.getElementById("symbol-verdict").innerHTML = `<span class="verdict-pill verdict-${r.verdict}">${r.verdict}</span>`;
+      currentSymbolFundamentals = r.fundamentals;
+      currentSymbolEarnings = r.earnings;
+      renderSymbolStats();
     }
   } catch (err) {
     out.textContent = "Error: " + err.message;

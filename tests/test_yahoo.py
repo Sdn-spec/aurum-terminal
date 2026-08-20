@@ -30,6 +30,9 @@ SAMPLE_CHART_RESPONSE = {
                     "fiftyTwoWeekHigh": 2500.0,
                     "fiftyTwoWeekLow": 1900.0,
                     "regularMarketTime": 1700000000,
+                    "chartPreviousClose": 2398.0,
+                    "regularMarketOpen": 2401.0,
+                    "regularMarketVolume": 45000,
                 },
                 "timestamp": [1699900000, 1699986400, 1700072800],
                 "indicators": {
@@ -78,6 +81,9 @@ class TestYahooClient(unittest.TestCase):
         self.assertEqual(quote.price, 2410.5)
         self.assertEqual(quote.day_high, 2415.0)
         self.assertEqual(quote.exchange, "COMEX")
+        self.assertEqual(quote.previous_close, 2398.0)
+        self.assertEqual(quote.open, 2401.0)
+        self.assertEqual(quote.volume, 45000)
 
     def test_429_retries_then_succeeds(self):
         responses = [

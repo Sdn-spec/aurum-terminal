@@ -92,8 +92,11 @@
           </div>
           <div class="symbol-header-price">
             <span id="symbol-price">—</span>
+            <span id="symbol-change"></span>
             <span id="symbol-verdict"></span>
           </div>
+          <p id="symbol-asof" class="status-line"></p>
+          <div id="symbol-stats" class="symbol-stats-grid"></div>
         </div>
 
         <section class="card" id="panel-chart">
@@ -106,7 +109,8 @@
                 <button data-tf="1d" class="active">1d</button>
               </div>
               <div class="seg" id="chart-type">
-                <button data-type="line" class="active">Line</button>
+                <button data-type="area" class="active">Area</button>
+                <button data-type="line">Line</button>
                 <button data-type="candles">Candles</button>
               </div>
             </div>

@@ -51,6 +51,9 @@ class Quote:
     currency: str
     exchange: str
     market_time: int  # unix seconds of the last update
+    previous_close: float = 0.0  # prior session's close -- day change is computed from this
+    open: float = 0.0
+    volume: float = 0.0
 
 
 def _fetch(symbol: str, params: dict, retries: int = 4) -> dict:
@@ -133,4 +136,7 @@ def get_quote(symbol: str) -> Quote:
         currency=meta.get("currency", ""),
         exchange=meta.get("fullExchangeName", meta.get("exchangeName", "")),
         market_time=meta.get("regularMarketTime", 0),
+        previous_close=meta.get("chartPreviousClose") or meta.get("previousClose") or 0.0,
+        open=meta.get("regularMarketOpen", 0.0) or 0.0,
+        volume=meta.get("regularMarketVolume", 0.0) or 0.0,
     )

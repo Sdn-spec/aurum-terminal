@@ -22,10 +22,12 @@
   --positive-strong: #5EE3AC;
   --positive-glow: rgba(52, 201, 138, 0.5);
   --positive-soft: rgba(52, 201, 138, 0.14);
+  --positive-area-fill: rgba(52, 201, 138, 0.18);
   --negative: #E1614A;
   --negative-strong: #FF8268;
   --negative-glow: rgba(225, 97, 74, 0.5);
   --negative-soft: rgba(225, 97, 74, 0.14);
+  --negative-area-fill: rgba(225, 97, 74, 0.18);
   --neutral: #8A9099;
   --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
   --font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -58,10 +60,12 @@
     --positive-strong: #14603F;
     --positive-glow: rgba(31, 122, 84, 0.3);
     --positive-soft: rgba(31, 122, 84, 0.10);
+    --positive-area-fill: rgba(31, 122, 84, 0.14);
     --negative: #B3452B;
     --negative-strong: #8F3620;
     --negative-glow: rgba(179, 69, 43, 0.3);
     --negative-soft: rgba(179, 69, 43, 0.10);
+    --negative-area-fill: rgba(179, 69, 43, 0.14);
     --neutral: #6B7280;
   }
 }
@@ -240,6 +244,22 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .symbol-header-id h2 { font-family: var(--font-display); font-weight: 640; font-size: 1.7rem; margin: 0; }
 .symbol-header-price { display: flex; align-items: center; gap: 12px; font-family: var(--font-mono); font-size: 1.35rem; font-weight: 700; }
 .symbol-header .verdict-pill { margin-bottom: 0; }
+#symbol-change { font-size: 1rem; }
+#symbol-change.pos { color: var(--positive); }
+#symbol-change.neg { color: var(--negative); }
+
+/* #symbol-asof and .symbol-stats-grid are later flex children of .symbol-header
+   (which wraps) -- forcing them to their own line rather than trying to squeeze
+   in next to the id/price row */
+#symbol-asof, .symbol-stats-grid { flex-basis: 100%; }
+#symbol-asof { margin: 0; font-size: 0.72rem; }
+
+.symbol-stats-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px 16px;
+  margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--border); font-family: var(--font-mono);
+}
+.symbol-stat-label { font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+.symbol-stat-value { font-size: 0.9rem; font-weight: 600; color: var(--text-primary); margin-top: 2px; }
 
 #panel-chart h3, #panel-analyze h3, #panel-scanner h3, #panel-decision h3, #panel-forecast h3, #panel-backtest h3 {
   font-family: var(--font-display); font-weight: 620; font-size: 1.02rem; margin: 0;
