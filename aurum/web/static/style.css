@@ -261,9 +261,12 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .symbol-stat-label { font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
 .symbol-stat-value { font-size: 0.9rem; font-weight: 600; color: var(--text-primary); margin-top: 2px; }
 
-#panel-chart h3, #panel-analyze h3, #panel-scanner h3, #panel-decision h3, #panel-forecast h3, #panel-backtest h3 {
+#panel-chart h3, #panel-analyze h3, #panel-scanner h3, #panel-decision h3, #panel-forecast h3, #panel-backtest h3,
+#panel-analyze h4 {
   font-family: var(--font-display); font-weight: 620; font-size: 1.02rem; margin: 0;
 }
+#panel-analyze h4 { font-size: 0.92rem; }
+.narrative-text { white-space: pre-wrap; line-height: 1.7; }
 
 /* ---- watchlist table ---- */
 .table-scroll { overflow-x: auto; }

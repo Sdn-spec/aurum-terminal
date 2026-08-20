@@ -23,6 +23,7 @@ from ..backtest.adapter import run_strategy
 from ..datafeed import cache, finnhub, fred, universe, watchlist_store, yahoo
 from ..decision import memo as decision_memo
 from ..forecast import baseline
+from ..llm import groq_client
 from ..optimize import engine as optimize_engine
 from ..report import analyzer
 from ..signals import scanner
@@ -508,6 +509,32 @@ async def get_analysis(name: str):
     response = _analysis_report_dict(result)
     response["previous_verdict"] = previous_verdict
     return response
+
+
+# ---- AI narrative (Groq, optional) ------------------------------------------
+
+
+@app.get("/api/narrative/status")
+async def get_narrative_status():
+    """So the frontend can show/hide the "Write AI Summary" button without
+    guessing -- no key configured means the feature just doesn't offer itself."""
+    return {"available": groq_client.resolve_api_key() is not None}
+
+
+@app.post("/api/narrative/{name}")
+async def post_narrative(name: str, report: dict):
+    """Turns an already-fetched Analyze report (the frontend already has one --
+    see /api/analyze/{name}) into a short plain-English narrative. Takes the
+    report as the request body instead of recomputing it, since analyze_symbol()
+    doesn't hit the network and the frontend's copy is already current."""
+    api_key = groq_client.resolve_api_key()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="No Groq API key configured — see README for how to add one")
+    try:
+        narrative = await asyncio.to_thread(groq_client.generate_narrative, report, api_key)
+    except yahoo.DataFeedError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"narrative": narrative}
 
 
 # ---- backtest -----------------------------------------------------------------

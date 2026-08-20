@@ -453,6 +453,8 @@ async function startLiveWatchlistLoop() {
 let currentSymbolQuote = null;
 let currentSymbolFundamentals = null;
 let currentSymbolEarnings = null;
+let currentAnalysisReport = null; // the full /api/analyze response -- POSTed as-is to /api/narrative
+let narrativeAvailable = false; // set once at boot from /api/narrative/status
 
 let lastSymbolHeaderPrice = null;
 
@@ -975,11 +977,41 @@ async function runAnalyze(name) {
       currentSymbolFundamentals = r.fundamentals;
       currentSymbolEarnings = r.earnings;
       renderSymbolStats();
+      currentAnalysisReport = r;
+      const narrativeSection = document.getElementById("ai-narrative-section");
+      const narrativeOutput = document.getElementById("narrative-output");
+      if (narrativeSection) narrativeSection.hidden = !narrativeAvailable;
+      if (narrativeOutput) narrativeOutput.innerHTML = "";
     }
   } catch (err) {
     out.textContent = "Error: " + err.message;
   }
 }
+
+// ---- AI narrative (optional -- only shows once a Groq key is configured) ----
+
+async function loadNarrativeAvailability() {
+  try {
+    const r = await getJSON("/api/narrative/status");
+    narrativeAvailable = r.available;
+  } catch (err) {
+    narrativeAvailable = false;
+  }
+}
+
+document.getElementById("run-narrative").addEventListener("click", async () => {
+  if (!currentAnalysisReport || !selectedSymbol) return;
+  const out = document.getElementById("narrative-output");
+  out.innerHTML = loadingHtml("Writing summary…");
+  try {
+    const r = await getJSON(`/api/narrative/${selectedSymbol}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(currentAnalysisReport),
+    });
+    out.innerHTML = `<div class="narrative-text">${escapeHtml(r.narrative)}</div>`;
+  } catch (err) {
+    out.textContent = "Error: " + err.message;
+  }
+});
 
 // ---- decision memo -----------------------------------------------------------
 // A second, independent verdict (single fixed 2R target, different scoring)
@@ -1239,5 +1271,6 @@ document.getElementById("run-fund").addEventListener("click", async () => {
 loadState();
 loadWatchlist().then(startLiveWatchlistLoop);
 loadAlerts();
+loadNarrativeAvailability();
 startLiveChartLoop();
 setInterval(() => { renderWatchlistStatus(); renderChartSummary(); }, 1000); // ticks the "updated Ns ago" text between real polls

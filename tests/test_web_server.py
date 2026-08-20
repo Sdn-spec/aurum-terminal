@@ -62,6 +62,7 @@ class TestWebServer(unittest.TestCase):
         os.environ.pop("TWELVEDATA_API_KEY", None)
         os.environ.pop("FRED_API_KEY", None)
         os.environ.pop("FINNHUB_API_KEY", None)
+        os.environ.pop("GROQ_API_KEY", None)
         # server._macro_cache/_news_cache/_fundamentals_cache are process-global —
         # reset them per test so one test's fake FRED/Finnhub data can't leak into the next.
         self._macro_cache_patch = patch.object(server, "_macro_cache", {"data": None, "at": 0.0})
@@ -182,6 +183,35 @@ class TestWebServer(unittest.TestCase):
             first = self.client.get("/api/analyze/GOLD").json()
             second = self.client.get("/api/analyze/GOLD").json()
         self.assertEqual(second["previous_verdict"], first["verdict"])
+
+    def test_narrative_status_false_when_no_key_configured(self):
+        res = self.client.get("/api/narrative/status")
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(res.json()["available"])
+
+    def test_narrative_status_true_when_key_configured(self):
+        provider.CONFIG_PATH.write_text(json.dumps({"groq_api_key": "fake-groq"}))
+        res = self.client.get("/api/narrative/status")
+        self.assertTrue(res.json()["available"])
+
+    def test_narrative_endpoint_returns_503_when_no_key_configured(self):
+        res = self.client.post("/api/narrative/AAPL", json={"symbol": "AAPL", "verdict": "INVEST"})
+        self.assertEqual(res.status_code, 503)
+
+    def test_narrative_endpoint_returns_generated_text(self):
+        provider.CONFIG_PATH.write_text(json.dumps({"groq_api_key": "fake-groq"}))
+        with patch("aurum.llm.groq_client.generate_narrative", return_value="AAPL looks constructive here."):
+            res = self.client.post("/api/narrative/AAPL", json={"symbol": "AAPL", "verdict": "INVEST"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["narrative"], "AAPL looks constructive here.")
+
+    def test_narrative_endpoint_returns_clean_502_on_groq_failure(self):
+        from aurum.datafeed.yahoo import DataFeedError
+
+        provider.CONFIG_PATH.write_text(json.dumps({"groq_api_key": "fake-groq"}))
+        with patch("aurum.llm.groq_client.generate_narrative", side_effect=DataFeedError("Groq returned HTTP 429")):
+            res = self.client.post("/api/narrative/AAPL", json={"symbol": "AAPL", "verdict": "INVEST"})
+        self.assertEqual(res.status_code, 502)
 
     def test_quote_success(self):
         with patch("aurum.datafeed.yahoo.get_quote", side_effect=_fake_quote):

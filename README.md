@@ -131,7 +131,8 @@ render). Same `data/config.json` file, same env-var-first resolution order:
 {
   "twelvedata_api_key": "...",
   "fred_api_key": "...",
-  "finnhub_api_key": "..."
+  "finnhub_api_key": "...",
+  "groq_api_key": "..."
 }
 ```
 
@@ -145,6 +146,15 @@ render). Same `data/config.json` file, same env-var-first resolution order:
   ...) — commodity/forex/index names like GOLD or BTC aren't
   Finnhub-recognized symbols, so these sections just come back empty for
   them, not an error.
+- **Groq** (the "Write AI Summary" button on the Analyze report) — free,
+  no credit card, generous free tier. Get a key at
+  <https://console.groq.com/keys>, or set `GROQ_API_KEY`. This one's
+  different in kind from the others: it doesn't add any new data, it
+  just asks a free LLM to turn the report's already-computed numbers
+  (verdict, bull/bear case, trade plans, risk status) into a short
+  plain-English narrative instead of a checklist. The button only
+  appears once a key is configured; nothing here overrides or second-
+  guesses the rule-based verdict.
 
 Other providers considered and why they lost: **Google Finance** has no
 public API anymore (the old one was deprecated years ago). **Stooq** is
