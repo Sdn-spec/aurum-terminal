@@ -27,132 +27,142 @@
     </form>
   </header>
 
+  <nav class="topnav" id="topnav">
+    <button data-view="watchlist" class="active">Watchlist</button>
+    <button data-view="fund">Fund</button>
+    <button data-view="optimizer">Optimizer</button>
+  </nav>
+
   <div id="body">
-    <button id="watchlist-toggle" type="button" aria-label="Toggle watchlist" title="Toggle watchlist">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
-    </button>
-    <aside id="watchlist-pane" class="card">
-      <div class="card-head"><h2>Watchlist</h2><button id="refresh-quotes" type="button">Refresh</button></div>
-      <div class="table-scroll">
-        <table id="watchlist-table">
-          <thead><tr><th>Symbol</th><th>Ticker</th><th class="c-num">Last</th><th class="c-num">Day High</th><th class="c-num">Day Low</th></tr></thead>
-          <tbody id="watchlist-body"></tbody>
-        </table>
-      </div>
-      <p id="watchlist-status" class="status-line"></p>
-    </aside>
-
     <main id="main-pane">
-      <nav class="tabs" id="tabs">
-        <button data-tab="fund" class="active">Fund</button>
-        <button data-tab="analyze">Analyze</button>
-        <button data-tab="chart">Chart</button>
-        <button data-tab="scanner">Scanner</button>
-        <button data-tab="decision">Decision</button>
-        <button data-tab="risk">Risk</button>
-        <button data-tab="optimizer">Optimizer</button>
-        <button data-tab="forecast">Forecast</button>
-        <button data-tab="backtest">Backtest</button>
-        <span class="tab-underline" id="tab-underline"></span>
-      </nav>
 
-      <section class="tab-panel card active" id="panel-fund">
-        <div class="card-head">
-          <h2>Your Fund</h2>
-          <button id="run-fund" type="button">Scan whole watchlist</button>
-        </div>
-        <p class="status-line">Runs the scanner and risk gate across every symbol at once, then suggests how to split capital across whatever clears the bar. Nothing here trades for you.</p>
-        <div id="fund-summary" class="panel-body"></div>
-        <div id="fund-donut" class="donut-wrap" hidden></div>
-        <div class="table-scroll">
-          <table id="fund-table" hidden>
-            <thead><tr><th>Symbol</th><th>Pattern</th><th class="c-num">Score</th><th>Verdict</th><th class="c-num">R:R</th><th class="c-num">Allocation</th></tr></thead>
-            <tbody id="fund-body"></tbody>
-          </table>
+      <!-- ===== Watchlist: the home view, live prices, click a row for everything ===== -->
+      <section class="view active" id="view-watchlist">
+        <div class="card">
+          <div class="card-head">
+            <h2>Watchlist</h2>
+            <button id="refresh-quotes" type="button">Refresh</button>
+          </div>
+          <p class="status-line">Click any symbol for its full picture — chart, verdict, bull/bear case, trade plans, risk, forecast, and backtest, all on one page.</p>
+          <div class="table-scroll">
+            <table id="watchlist-table" class="watchlist-table-big">
+              <thead><tr><th>Symbol</th><th>Ticker</th><th class="c-num">Last</th><th class="c-num">Day High</th><th class="c-num">Day Low</th></tr></thead>
+              <tbody id="watchlist-body"></tbody>
+            </table>
+          </div>
+          <p id="watchlist-status" class="status-line"></p>
         </div>
       </section>
 
-      <section class="tab-panel card" id="panel-analyze">
-        <div class="card-head">
-          <h2>Analyze</h2>
-          <form id="analyze-form" class="analyze-form">
-            <select id="analyze-symbol"></select>
-            <button type="submit">Analyze</button>
-          </form>
-        </div>
-        <p class="status-line">Pick a symbol from your watchlist and get one report: research, a bull/bear case, a risk check, and trade plans for both day trading and a long-term hold — ending in one verdict. This never places a trade; you still make the call.</p>
-        <div id="analyze-output" class="panel-body">Pick a symbol above and press Analyze.</div>
-      </section>
+      <!-- ===== Symbol detail: everything for one stock, auto-loaded on open ===== -->
+      <section class="view" id="view-symbol">
+        <button id="back-to-watchlist" type="button" class="back-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+          Watchlist
+        </button>
 
-      <section class="tab-panel card" id="panel-chart">
-        <div class="card-head">
-          <h2 id="chart-title">Chart — select a symbol</h2>
-          <div class="card-head-controls">
-            <div class="seg" id="chart-timeframe">
-              <button data-tf="1m">1m</button>
-              <button data-tf="15m">15m</button>
-              <button data-tf="1d" class="active">1d</button>
-            </div>
-            <div class="seg" id="chart-type">
-              <button data-type="line" class="active">Line</button>
-              <button data-type="candles">Candles</button>
+        <div class="symbol-header">
+          <div class="symbol-header-id">
+            <span id="symbol-icon"></span>
+            <h2 id="symbol-title">—</h2>
+          </div>
+          <div class="symbol-header-price">
+            <span id="symbol-price">—</span>
+            <span id="symbol-verdict"></span>
+          </div>
+        </div>
+
+        <section class="card" id="panel-chart">
+          <div class="card-head">
+            <h3>Chart</h3>
+            <div class="card-head-controls">
+              <div class="seg" id="chart-timeframe">
+                <button data-tf="1m">1m</button>
+                <button data-tf="15m">15m</button>
+                <button data-tf="1d" class="active">1d</button>
+              </div>
+              <div class="seg" id="chart-type">
+                <button data-type="line" class="active">Line</button>
+                <button data-type="candles">Candles</button>
+              </div>
             </div>
           </div>
-        </div>
-        <div id="chart-wrap">
-          <div id="chart-container"></div>
-          <div id="chart-legend" class="chart-legend" hidden></div>
-        </div>
-        <p id="chart-summary" class="status-line"></p>
+          <div id="chart-wrap">
+            <div id="chart-container"></div>
+            <div id="chart-legend" class="chart-legend" hidden></div>
+          </div>
+          <p id="chart-summary" class="status-line"></p>
+        </section>
+
+        <section class="card" id="panel-analyze">
+          <div class="card-head"><h3>Detailed Analysis</h3></div>
+          <div id="analyze-output" class="panel-body">Loading…</div>
+        </section>
+
+        <section class="card" id="panel-scanner">
+          <div class="card-head"><h3>Setup Scanner</h3></div>
+          <div id="scanner-output" class="panel-body">Loading…</div>
+        </section>
+
+        <section class="card" id="panel-decision">
+          <div class="card-head"><h3>Quick Decision Memo</h3></div>
+          <p class="status-line">A second, independent read — single fixed target, take-it/watch-it/skip-it verdict. Complements the Detailed Analysis above rather than replacing it.</p>
+          <div id="decision-output" class="panel-body">Loading…</div>
+        </section>
+
+        <section class="card" id="panel-forecast">
+          <div class="card-head">
+            <h3>Forecast</h3>
+            <button id="run-forecast-kronos" type="button">Run Kronos-mini</button>
+          </div>
+          <p class="status-line">Baseline loads automatically. Kronos runs a real ~4M-parameter model on CPU — first call downloads ~30MB of weights and takes a few seconds, so it's on demand.</p>
+          <div id="forecast-output" class="panel-body">Loading…</div>
+        </section>
+
+        <section class="card" id="panel-backtest">
+          <div class="card-head"><h3>Trend Pullback Backtest</h3></div>
+          <div id="backtest-chart-wrap">
+            <div id="backtest-container"></div>
+            <div id="backtest-legend" class="chart-legend" hidden></div>
+          </div>
+          <div id="backtest-output" class="panel-body">Loading…</div>
+        </section>
       </section>
 
-      <section class="tab-panel card" id="panel-scanner">
-        <div class="card-head"><h2>Setup Scanner</h2><button id="run-scanner" type="button">Scan selected symbol</button></div>
-        <div id="scanner-output" class="panel-body">Select a symbol, then press Scan.</div>
-      </section>
-
-      <section class="tab-panel card" id="panel-decision">
-        <div class="card-head"><h2>Decision Memo</h2><button id="run-decision" type="button">Build memo</button></div>
-        <div id="decision-output" class="panel-body">Combines the scanner, the risk gate, and a trade plan into one verdict — take it, watch it, or skip it. You still make the call.</div>
-      </section>
-
-      <section class="tab-panel card" id="panel-risk">
-        <div class="card-head"><h2>Risk Gate</h2></div>
-        <div id="risk-gauges" class="gauge-row"></div>
-        <div id="risk-output" class="panel-body">Run a Decision Memo to see the risk checklist for the current account settings and selected symbol.</div>
-      </section>
-
-      <section class="tab-panel card" id="panel-optimizer">
-        <div class="card-head">
-          <h2>Portfolio Optimizer</h2>
-          <div>
-            <select id="optimizer-method"><option value="hrp">Hierarchical Risk Parity</option><option value="mean_risk">Mean-Variance</option></select>
-            <button id="run-optimizer" type="button">Run</button>
+      <!-- ===== Fund: whole-watchlist scan + allocation (not symbol-specific) ===== -->
+      <section class="view" id="view-fund">
+        <div class="card">
+          <div class="card-head">
+            <h2>Your Fund</h2>
+            <button id="run-fund" type="button">Scan whole watchlist</button>
+          </div>
+          <p class="status-line">Runs the scanner and risk gate across every symbol at once, then suggests how to split capital across whatever clears the bar. Nothing here trades for you.</p>
+          <div id="fund-summary" class="panel-body"></div>
+          <div id="fund-donut" class="donut-wrap" hidden></div>
+          <div class="table-scroll">
+            <table id="fund-table" hidden>
+              <thead><tr><th>Symbol</th><th>Pattern</th><th class="c-num">Score</th><th>Verdict</th><th class="c-num">R:R</th><th class="c-num">Allocation</th></tr></thead>
+              <tbody id="fund-body"></tbody>
+            </table>
           </div>
         </div>
-        <div id="optimizer-donut" class="donut-wrap" hidden></div>
-        <div id="optimizer-output" class="panel-body">Runs skfolio across the whole watchlist.</div>
       </section>
 
-      <section class="tab-panel card" id="panel-forecast">
-        <div class="card-head">
-          <h2>Forecast</h2>
-          <div>
-            <button id="run-forecast-baseline" type="button">Baseline</button>
-            <button id="run-forecast-kronos" type="button">Kronos-mini</button>
+      <!-- ===== Optimizer: portfolio weights across the whole watchlist ===== -->
+      <section class="view" id="view-optimizer">
+        <div class="card">
+          <div class="card-head">
+            <h2>Portfolio Optimizer</h2>
+            <div>
+              <select id="optimizer-method"><option value="hrp">Hierarchical Risk Parity</option><option value="mean_risk">Mean-Variance</option></select>
+              <button id="run-optimizer" type="button">Run</button>
+            </div>
           </div>
+          <div id="optimizer-donut" class="donut-wrap" hidden></div>
+          <div id="optimizer-output" class="panel-body">Runs skfolio across the whole watchlist.</div>
         </div>
-        <div id="forecast-output" class="panel-body">Baseline is instant. Kronos runs a real ~4M-parameter model on CPU — first call downloads ~30MB of weights and takes a few seconds.</div>
       </section>
 
-      <section class="tab-panel card" id="panel-backtest">
-        <div class="card-head"><h2>Trend Pullback Backtest</h2><button id="run-backtest" type="button">Run on real history</button></div>
-        <div id="backtest-chart-wrap">
-          <div id="backtest-container"></div>
-          <div id="backtest-legend" class="chart-legend" hidden></div>
-        </div>
-        <div id="backtest-output" class="panel-body"></div>
-      </section>
     </main>
   </div>
 

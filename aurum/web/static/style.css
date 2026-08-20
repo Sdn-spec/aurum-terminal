@@ -175,24 +175,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .account-form button:active, .card-head button:active { transform: translateY(0); }
 
 /* ---- layout ---- */
-#body { display: flex; gap: 18px; padding: 20px 28px 44px; align-items: flex-start; position: relative; }
-#watchlist-pane {
-  width: 380px; flex: none; overflow: hidden;
-  animation: fadeInLeft 0.6s 0.05s var(--ease-out) both;
-  transition: width 0.32s var(--ease-out), opacity 0.24s var(--ease-out), margin 0.32s var(--ease-out), padding 0.32s var(--ease-out), border-width 0.32s;
-}
-#watchlist-pane.collapsed {
-  width: 0; opacity: 0; padding: 0; border-width: 0; margin-right: -18px; pointer-events: none;
-}
-#main-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; animation: fadeInUp 0.6s 0.1s var(--ease-out) both; }
-#watchlist-toggle {
-  flex: none; width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
-  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-secondary);
-  transition: background 0.2s, color 0.2s, transform 0.28s var(--ease-out);
-}
-#watchlist-toggle:hover { color: var(--accent-strong); border-color: var(--border-strong); }
-#watchlist-toggle svg { width: 16px; height: 16px; transition: transform 0.28s var(--ease-out); }
-#watchlist-toggle.collapsed svg { transform: rotate(180deg); }
+#body { padding: 8px 28px 44px; position: relative; }
+#main-pane { max-width: 1400px; margin: 0 auto; animation: fadeInUp 0.6s 0.1s var(--ease-out) both; }
 
 @keyframes fadeInDown { from { opacity: 0; transform: translateY(-14px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes fadeInUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
@@ -225,23 +209,41 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .seg button:hover { color: var(--text-primary); }
 .seg button.active { background: linear-gradient(135deg, var(--accent-strong), var(--accent)); color: var(--accent-ink); }
 
-/* ---- tabs ---- */
-.tabs { position: relative; display: flex; gap: 2px; border-bottom: 1px solid var(--border); padding-bottom: 0; }
-.tabs button {
+/* ---- top nav (Watchlist / Fund / Optimizer) ---- */
+.topnav { display: flex; gap: 2px; padding: 12px 28px 0; border-bottom: 1px solid var(--border); }
+.topnav button {
   background: none; border: none; color: var(--text-secondary);
-  padding: 10px 15px; font-size: 0.85rem; font-weight: 600; cursor: pointer;
-  position: relative; transition: color 0.2s;
+  padding: 10px 16px; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+  border-radius: 8px 8px 0 0; transition: color 0.2s, background 0.2s;
 }
-.tabs button:hover { color: var(--text-primary); }
-.tabs button.active { color: var(--accent-strong); }
-.tab-underline {
-  position: absolute; bottom: -1px; height: 2px; border-radius: 2px;
-  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
-  box-shadow: 0 0 10px var(--accent-glow);
-  transition: left 0.32s var(--ease-out), width 0.32s var(--ease-out);
+.topnav button:hover { color: var(--text-primary); }
+.topnav button.active { color: var(--accent-strong); box-shadow: inset 0 -2px 0 0 var(--accent-strong); }
+
+/* ---- views (Watchlist / Symbol detail / Fund / Optimizer) ---- */
+.view { display: none; }
+.view.active { display: flex; flex-direction: column; gap: 14px; animation: fadeIn 0.35s var(--ease-out) both; }
+
+/* ---- symbol detail: back button + header ---- */
+.back-btn {
+  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 13px; font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);
+  transition: color 0.2s, border-color 0.2s, transform 0.16s;
 }
-.tab-panel { display: none; }
-.tab-panel.active { display: block; animation: fadeIn 0.35s var(--ease-out) both; }
+.back-btn:hover { color: var(--accent-strong); border-color: var(--border-strong); transform: translateX(-2px); }
+.back-btn svg { width: 15px; height: 15px; }
+
+.symbol-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 2px 2px 4px; }
+.symbol-header-id { display: flex; align-items: center; gap: 10px; }
+.symbol-header-id .sym-icon { width: 34px; height: 34px; }
+.symbol-header-id .sym-icon svg { width: 19px; height: 19px; }
+.symbol-header-id h2 { font-family: var(--font-display); font-weight: 640; font-size: 1.7rem; margin: 0; }
+.symbol-header-price { display: flex; align-items: center; gap: 12px; font-family: var(--font-mono); font-size: 1.35rem; font-weight: 700; }
+.symbol-header .verdict-pill { margin-bottom: 0; }
+
+#panel-chart h3, #panel-analyze h3, #panel-scanner h3, #panel-decision h3, #panel-forecast h3, #panel-backtest h3 {
+  font-family: var(--font-display); font-weight: 620; font-size: 1.02rem; margin: 0;
+}
 
 /* ---- watchlist table ---- */
 .table-scroll { overflow-x: auto; }
@@ -255,6 +257,14 @@ tbody tr.watch-row { cursor: pointer; transition: background 0.15s; opacity: 0; 
 tbody tr.watch-row:hover { background: var(--surface-2); }
 tbody tr.watch-row.selected { background: var(--accent-wash); box-shadow: inset 3px 0 0 var(--accent); }
 @keyframes rowIn { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }
+
+/* the landing-page watchlist is the app's front door now, so it gets a
+   noticeably bigger, easier-to-scan table than any other panel's list */
+.watchlist-table-big thead th { font-size: 0.7rem; padding: 10px 12px; }
+.watchlist-table-big tbody td { padding: 14px 12px; font-size: 1rem; }
+.watchlist-table-big .sym-icon { width: 30px; height: 30px; }
+.watchlist-table-big .sym-icon svg { width: 17px; height: 17px; }
+.watchlist-table-big .sym-cell span { font-weight: 650; font-family: var(--font-display); font-size: 1.05rem; }
 
 .sym-cell { display: flex; align-items: center; gap: 8px; }
 .sym-icon {
@@ -414,7 +424,7 @@ th.c-num { text-align: right; }
 .foot-note { color: var(--text-muted); font-size: 0.76rem; text-align: center; padding: 10px 0 26px; }
 
 @media (max-width: 900px) {
-  #body { flex-direction: column; }
-  #watchlist-pane { width: 100%; }
   body::before, body::after { width: 90vw; height: 90vw; }
+  .topnav { padding-left: 14px; padding-right: 14px; }
+  #body { padding-left: 14px; padding-right: 14px; }
 }

@@ -76,47 +76,29 @@ function iconFor(name) {
   return `<span class="sym-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[key]}</svg></span>`;
 }
 
-// ---- tabs -------------------------------------------------------------
+// ---- views: Watchlist (home) / Symbol detail (drill-down) / Fund / Optimizer --
 
-function positionTabUnderline(btn) {
-  const underline = document.getElementById("tab-underline");
-  if (!btn || !underline) return;
-  underline.style.left = btn.offsetLeft + "px";
-  underline.style.width = btn.offsetWidth + "px";
+/** Symbol detail isn't one of the top-nav destinations (it's reached only by
+ * clicking a watchlist row, with its own back button), so switching to it
+ * leaves every top-nav button inactive — intentional, there's no "you are
+ * here" button for a page you can only arrive at via drill-down. */
+function switchView(viewName) {
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + viewName));
+  document.querySelectorAll("#topnav button[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === viewName));
+  // Lightweight Charts sized itself against a hidden (display:none, 0x0) container
+  // if the symbol view was never opened yet — ResizeObserver catches most of this,
+  // but a belt-and-suspenders resize+refit right when it becomes visible avoids any
+  // race between "view just unhid" and "observer callback fires."
+  if (viewName === "symbol") {
+    requestAnimationFrame(() => { resizePriceChart(); resizeBacktestChart(); });
+  }
 }
-document.getElementById("tabs").addEventListener("click", (e) => {
-  const btn = e.target.closest("button[data-tab]");
+document.getElementById("topnav").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-view]");
   if (!btn) return;
-  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b === btn));
-  document.querySelectorAll(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + btn.dataset.tab));
-  positionTabUnderline(btn);
-  // Lightweight Charts sized itself against a hidden (display:none, 0x0) panel if
-  // that tab was never visited yet — ResizeObserver catches most of this, but a
-  // belt-and-suspenders resize+refit right when the tab becomes visible avoids any
-  // race between "panel just unhid" and "observer callback fires."
-  requestAnimationFrame(() => {
-    if (btn.dataset.tab === "chart") resizePriceChart();
-    if (btn.dataset.tab === "backtest") resizeBacktestChart();
-  });
+  switchView(btn.dataset.view);
 });
-window.addEventListener("resize", () => positionTabUnderline(document.querySelector("#tabs button.active")));
-
-// ---- watchlist collapse (persisted) ------------------------------------------
-
-function setWatchlistCollapsed(collapsed) {
-  document.getElementById("watchlist-pane").classList.toggle("collapsed", collapsed);
-  document.getElementById("watchlist-toggle").classList.toggle("collapsed", collapsed);
-  try { localStorage.setItem("aurum-watchlist-collapsed", collapsed ? "1" : "0"); } catch (e) {}
-}
-document.getElementById("watchlist-toggle").addEventListener("click", () => {
-  const collapsed = !document.getElementById("watchlist-pane").classList.contains("collapsed");
-  setWatchlistCollapsed(collapsed);
-});
-(function restoreWatchlistCollapsed() {
-  let saved = null;
-  try { saved = localStorage.getItem("aurum-watchlist-collapsed"); } catch (e) {}
-  if (saved === "1") setWatchlistCollapsed(true);
-})();
+document.getElementById("back-to-watchlist").addEventListener("click", () => switchView("watchlist"));
 
 // ---- account state ------------------------------------------------------
 
@@ -187,16 +169,7 @@ async function buildWatchlistRows() {
         `<td class="c-num" data-cell="last">—</td><td class="c-num" data-cell="high">—</td><td class="c-num" data-cell="low">—</td></tr>`
     )
     .join("");
-  body.querySelectorAll("tr").forEach((row) => row.addEventListener("click", () => selectSymbol(row.dataset.name)));
-  populateAnalyzeSymbolSelect();
-}
-
-function populateAnalyzeSymbolSelect() {
-  const select = document.getElementById("analyze-symbol");
-  if (!select) return;
-  const current = select.value;
-  select.innerHTML = watchlistDefs.map((w) => `<option value="${w.name}">${w.name}</option>`).join("");
-  if (current && watchlistDefs.some((w) => w.name === current)) select.value = current;
+  body.querySelectorAll("tr").forEach((row) => row.addEventListener("click", () => openSymbol(row.dataset.name)));
 }
 
 async function refreshWatchlistQuotes() {
@@ -222,6 +195,12 @@ async function refreshWatchlistQuotes() {
         lastCell.classList.add(quote.price > prev ? "flash-up" : "flash-down");
       }
       lastQuoteValues[name] = quote.price;
+      // the symbol detail header shows its own live price off this same poll
+      // cycle, so opening a stock doesn't need a second/duplicate quote fetch
+      if (selectedSymbol === name) {
+        const priceEl = document.getElementById("symbol-price");
+        if (priceEl) priceEl.textContent = fmtPlain(quote.price);
+      }
     } catch (err) {
       errors++;
     }
@@ -235,7 +214,6 @@ async function refreshWatchlistQuotes() {
 async function loadWatchlist() {
   await buildWatchlistRows();
   await refreshWatchlistQuotes();
-  if (!selectedSymbol && watchlistDefs.length) selectSymbol(watchlistDefs[0].name);
 }
 document.getElementById("refresh-quotes").addEventListener("click", () => refreshWatchlistQuotes());
 
@@ -247,13 +225,26 @@ async function startLiveWatchlistLoop() {
   }
 }
 
-function selectSymbol(name) {
+/** The whole point of this app's shape: click one stock, see everything.
+ * Every panel below loads concurrently (none of these calls are awaited
+ * here) rather than waiting on each other, and each one is a small,
+ * independent fetch — a slow one (Kronos aside) doesn't block the rest. */
+function openSymbol(name) {
   selectedSymbol = name;
   document.querySelectorAll("#watchlist-body tr").forEach((r) => r.classList.toggle("selected", r.dataset.name === name));
-  document.getElementById("chart-title").innerHTML = `${iconFor(name)} Chart — ${name}`;
+  switchView("symbol");
+
+  document.getElementById("symbol-icon").innerHTML = iconFor(name);
+  document.getElementById("symbol-title").textContent = name;
+  document.getElementById("symbol-price").textContent = lastQuoteValues[name] !== undefined ? fmtPlain(lastQuoteValues[name]) : "—";
+  document.getElementById("symbol-verdict").innerHTML = "";
+
   loadChart(name);
-  const analyzeSelect = document.getElementById("analyze-symbol");
-  if (analyzeSelect) analyzeSelect.value = name;
+  runScanner(name);
+  runAnalyze(name);
+  runDecision(name);
+  runForecastBaseline(name);
+  runBacktest(name);
 }
 
 // ---- chart (TradingView Lightweight Charts: candles, volume, EMA overlay,
@@ -501,12 +492,11 @@ function renderDonut(container, weights) {
 
 // ---- setup scanner --------------------------------------------------------
 
-document.getElementById("run-scanner").addEventListener("click", async () => {
+async function runScanner(name) {
   const out = document.getElementById("scanner-output");
-  if (!selectedSymbol) { out.textContent = "Select a symbol in the watchlist first."; return; }
   out.innerHTML = loadingHtml("Scanning…");
   try {
-    const r = await getJSON(`/api/scan/${selectedSymbol}`);
+    const r = await getJSON(`/api/scan/${name}`);
     const lines = [
       `Pattern: ${r.pattern}    Score: ${r.score_pct.toFixed(0)}%    Setup detected: ${r.setup_detected ? "YES" : "no"}`,
       `Last close ${fmtPlain(r.last_close)}  ·  50-EMA ${fmtPlain(r.ema)}`,
@@ -517,7 +507,7 @@ document.getElementById("run-scanner").addEventListener("click", async () => {
   } catch (err) {
     out.textContent = "Error: " + err.message;
   }
-});
+}
 
 // ---- analyze: one symbol in, one detailed invest/avoid report out -----------
 
@@ -612,55 +602,49 @@ function renderAnalysis(r) {
 
     <div style="margin-top:16px">
       <span class="verdict-pill verdict-${r.risk.passed ? "APPROVED" : "REJECTED"}">${r.risk.status}</span>
+      <div id="analyze-gauges" class="gauge-row" style="margin-top:10px"></div>
       ${r.risk.checks.map((c) => `<div class="check-row"><span class="${c.passed ? "check-pass" : "check-fail"}">${c.passed ? "✓" : "✗"}</span> <strong>${c.name}</strong> — ${escapeHtml(c.detail)}</div>`).join("")}
     </div>`;
+
+  const gauges = document.getElementById("analyze-gauges");
+  renderGauge(gauges, { label: "Position size", valuePct: r.risk.position_size_pct, limitPct: 1.0 });
+  renderGauge(gauges, { label: "Exposure", valuePct: r.risk.exposure_pct, limitPct: 50.0 });
+  renderGauge(gauges, { label: "Drawdown", valuePct: r.risk.drawdown_pct, limitPct: 20.0 });
 }
 
-document.getElementById("analyze-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const select = document.getElementById("analyze-symbol");
-  const symbol = select.value;
+async function runAnalyze(name) {
   const out = document.getElementById("analyze-output");
-  if (!symbol) { out.textContent = "Pick a symbol first."; return; }
-  out.innerHTML = loadingHtml(`Analyzing ${escapeHtml(symbol)}…`);
+  out.innerHTML = loadingHtml(`Analyzing ${escapeHtml(name)}…`);
   try {
-    const r = await getJSON(`/api/analyze/${symbol}`);
+    const r = await getJSON(`/api/analyze/${name}`);
     renderAnalysis(r);
+    if (selectedSymbol === name) {
+      document.getElementById("symbol-verdict").innerHTML = `<span class="verdict-pill verdict-${r.verdict}">${r.verdict}</span>`;
+    }
   } catch (err) {
     out.textContent = "Error: " + err.message;
   }
-});
+}
 
-// ---- decision memo + risk --------------------------------------------------
+// ---- decision memo -----------------------------------------------------------
+// A second, independent verdict (single fixed 2R target, different scoring)
+// alongside the Detailed Analysis above — the risk checklist and gauges are
+// already shown there, so this stays compact rather than repeating them.
 
-document.getElementById("run-decision").addEventListener("click", async () => {
+async function runDecision(name) {
   const out = document.getElementById("decision-output");
-  const riskOut = document.getElementById("risk-output");
-  const gauges = document.getElementById("risk-gauges");
-  if (!selectedSymbol) { out.textContent = "Select a symbol in the watchlist first."; return; }
   out.innerHTML = loadingHtml("Building memo…");
   try {
-    const r = await getJSON(`/api/decision/${selectedSymbol}`);
+    const r = await getJSON(`/api/decision/${name}`);
     out.innerHTML =
-      `<span class="verdict-pill verdict-${r.verdict}">${r.verdict}</span>\n\n` +
+      `<span class="verdict-pill verdict-${r.verdict}">${r.verdict}</span>  <span class="verdict-pill verdict-${r.risk.passed ? "APPROVED" : "REJECTED"}">${r.risk.status}</span>\n\n` +
       `Plan: ${r.plan.direction.toUpperCase()}  entry ${fmtPlain(r.plan.entry)}  stop ${fmtPlain(r.plan.stop)}  target ${fmtPlain(r.plan.target)}  R:R ${r.plan.risk_reward_ratio.toFixed(2)}\n` +
       `Setup: ${r.scan.pattern} (${r.scan.score_pct.toFixed(0)}% confirmed)\n\n` +
       (r.reasons.length ? "Why:\n" + r.reasons.map((x) => "  • " + escapeHtml(x)).join("\n") : "All checks clear.");
-
-    riskOut.innerHTML =
-      `<span class="verdict-pill verdict-${r.risk.passed ? "APPROVED" : "REJECTED"}">${r.risk.status}</span>\n\n` +
-      r.risk.checks
-        .map((c) => `<div class="check-row"><span class="${c.passed ? "check-pass" : "check-fail"}">${c.passed ? "✓" : "✗"}</span> <strong>${c.name}</strong> — ${escapeHtml(c.detail)}</div>`)
-        .join("");
-
-    gauges.innerHTML = "";
-    renderGauge(gauges, { label: "Position size", valuePct: r.risk.position_size_pct, limitPct: 1.0 });
-    renderGauge(gauges, { label: "Exposure", valuePct: r.risk.exposure_pct, limitPct: 50.0 });
-    renderGauge(gauges, { label: "Drawdown", valuePct: r.risk.drawdown_pct, limitPct: 20.0 });
   } catch (err) {
     out.textContent = "Error: " + err.message;
   }
-});
+}
 
 // ---- optimizer -------------------------------------------------------------
 
@@ -692,12 +676,11 @@ document.getElementById("run-optimizer").addEventListener("click", async () => {
 
 // ---- forecast ---------------------------------------------------------------
 
-document.getElementById("run-forecast-baseline").addEventListener("click", async () => {
+async function runForecastBaseline(name) {
   const out = document.getElementById("forecast-output");
-  if (!selectedSymbol) { out.textContent = "Select a symbol in the watchlist first."; return; }
   out.innerHTML = loadingHtml("Forecasting…");
   try {
-    const r = await getJSON(`/api/forecast/baseline/${selectedSymbol}?horizon=10`);
+    const r = await getJSON(`/api/forecast/baseline/${name}?horizon=10`);
     const lines = [`Method: ${r.method}`, ""];
     r.point_forecast.forEach((p, i) => {
       lines.push(`  +${i + 1}d   ${fmtPlain(p).padStart(10)}   [${fmtPlain(r.lower_band[i])} .. ${fmtPlain(r.upper_band[i])}]`);
@@ -707,7 +690,7 @@ document.getElementById("run-forecast-baseline").addEventListener("click", async
   } catch (err) {
     out.textContent = "Error: " + err.message;
   }
-});
+}
 
 document.getElementById("run-forecast-kronos").addEventListener("click", async () => {
   const out = document.getElementById("forecast-output");
@@ -769,12 +752,11 @@ function resizeBacktestChart() {
 
 // ---- backtest -----------------------------------------------------------------
 
-document.getElementById("run-backtest").addEventListener("click", async () => {
+async function runBacktest(name) {
   const out = document.getElementById("backtest-output");
-  if (!selectedSymbol) { out.textContent = "Select a symbol in the watchlist first."; return; }
   out.innerHTML = loadingHtml("Running backtest on real history…");
   try {
-    const r = await getJSON(`/api/backtest/${selectedSymbol}`);
+    const r = await getJSON(`/api/backtest/${name}`);
     ensureBacktestChart();
     strategySeries.setData(r.strategy_equity_curve.map((p) => ({ time: p.timestamp, value: p.equity })));
     buyHoldSeries.setData(r.buy_hold_equity_curve.map((p) => ({ time: p.timestamp, value: p.equity })));
@@ -799,7 +781,7 @@ document.getElementById("run-backtest").addEventListener("click", async () => {
   } catch (err) {
     out.textContent = "Error: " + err.message;
   }
-});
+}
 
 // ---- fund (whole-watchlist scan + allocation) --------------------------------
 
@@ -868,4 +850,3 @@ loadState();
 loadWatchlist().then(startLiveWatchlistLoop);
 startLiveChartLoop();
 setInterval(() => { renderWatchlistStatus(); renderChartSummary(); }, 1000); // ticks the "updated Ns ago" text between real polls
-requestAnimationFrame(() => positionTabUnderline(document.querySelector("#tabs button.active")));
