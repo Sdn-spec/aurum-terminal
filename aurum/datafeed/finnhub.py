@@ -8,6 +8,14 @@ specially at the call site.
 Needs a free key from https://finnhub.io/register, set as
 FINNHUB_API_KEY or {"finnhub_api_key": "..."} in data/config.json — same
 file and resolution order as the Twelve Data and FRED keys.
+
+Verified live against a real free-tier key (2026-08-20): calendar/earnings
+and the general news endpoint both return real data. company-news (the
+per-symbol headlines get_company_news() calls) comes back an empty list on
+this plan regardless of date range (checked AAPL over both 7 and 30 days) —
+a free-tier restriction, not a bug here. get_company_news() is still
+correctly implemented for whenever that's upgraded; until then, expect
+the Analyze report's news section to just not appear (earnings still will).
 """
 
 import json
