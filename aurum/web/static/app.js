@@ -94,6 +94,7 @@ function switchView(viewName) {
   }
   if (viewName === "optimizer") loadCorrelation();
   if (viewName === "journal") loadJournal();
+  if (viewName === "markets") loadMarkets();
 }
 document.getElementById("topnav").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-view]");
@@ -1267,6 +1268,278 @@ document.getElementById("run-fund").addEventListener("click", async () => {
   }
 });
 
+// ---- markets board (live global index dashboard) ---------------------------
+// The server owns the upstream fetching and caches the batched snapshot for a
+// few seconds, so polling here at 5s costs one Yahoo call per 5s no matter how
+// many tabs are open -- see the markets section of aurum/web/server.py.
+
+let marketsRefreshMs = 5000;
+let marketsRows = [];
+let marketsAsOf = null;
+let marketsStale = false;
+let marketsDegraded = false;
+let marketsLastError = null;
+const marketsLastPrice = {}; // ticker -> last seen price, for the tick flash
+
+function marketsDirClass(v) {
+  if (v === null || v === undefined || Number.isNaN(v)) return "mkt-flat";
+  if (v > 0) return "mkt-up";
+  if (v < 0) return "mkt-down";
+  return "mkt-flat";
+}
+function marketsArrow(v) {
+  if (v === null || v === undefined || Number.isNaN(v) || v === 0) return "";
+  return `<span class="mkt-arrow">${v > 0 ? "▲" : "▼"}</span>`;
+}
+/** Magnitude only — the ▲/▼ arrow beside it already carries the sign, so
+ * printing "▼−232.46" would mark the same negative twice. */
+function fmtMagnitude(n, decimals = 2, suffix = "") {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  return Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) + suffix;
+}
+function fmtIndexValue(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtMarketTime(unixSeconds) {
+  if (!unixSeconds) return "—";
+  return new Date(unixSeconds * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+/** A tiny inline sparkline from the last ~30 daily closes. Coloured by the
+ * period's own direction (first vs last), which is not always the same sign
+ * as today's move -- an index can be up on the day inside a falling month. */
+function sparklineSvg(values, width = 150, height = 34) {
+  if (!values || values.length < 2) return "";
+  const min = Math.min(...values), max = Math.max(...values);
+  const range = max - min || 1;
+  const stepX = width / (values.length - 1);
+  const pts = values.map((v, i) => [i * stepX, height - ((v - min) / range) * (height - 4) - 2]);
+  const line = pts.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+  const area = line + ` L${width},${height} L0,${height} Z`;
+  const up = values[values.length - 1] >= values[0];
+  const stroke = up ? "var(--positive)" : "var(--negative)";
+  const fill = up ? "var(--positive-area-fill)" : "var(--negative-area-fill)";
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">` +
+    `<path d="${area}" fill="${fill}" stroke="none"/>` +
+    `<path d="${line}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>` +
+    `</svg>`;
+}
+
+function renderMarketsCards() {
+  const el = document.getElementById("markets-cards");
+  if (!el) return;
+  // The headline strip: one card per major benchmark, in board order.
+  const featured = marketsRows.filter((r) => r.region !== "Commodities & FX").slice(0, 10);
+  el.innerHTML = featured.map((r) => {
+    const cls = marketsDirClass(r.change_pct);
+    return `<div class="mkt-card">` +
+      `<span class="mkt-card-code">${escapeHtml(r.code)}</span>` +
+      `<span class="mkt-card-name" title="${escapeHtml(r.label)}">${escapeHtml(r.label)}</span>` +
+      `<span class="mkt-card-value">${fmtIndexValue(r.price)}<span class="mkt-ccy">${escapeHtml(r.currency)}</span></span>` +
+      `<span class="mkt-card-chg ${cls}">${marketsArrow(r.change_pct)}${fmtMagnitude(r.change_pct, 2, "%")}</span>` +
+      // The number above is today's move; the sparkline is the last 30 daily
+      // closes, so the two legitimately disagree (an index can be down today
+      // inside a rising month). Label the period so that reads as intended
+      // rather than as a mismatched colour.
+      `<div class="mkt-card-spark">${sparklineSvg(r.spark)}<span class="mkt-spark-tag">30D</span></div>` +
+      `</div>`;
+  }).join("");
+}
+
+/** Squarified treemap. Boxes are weighted by 1 + |move| so a flat day still
+ * produces readable tiles instead of slivers, and coloured by the size of the
+ * move in each direction. */
+function squarify(items, x, y, w, h, out) {
+  if (!items.length) return;
+  if (items.length === 1) {
+    out.push({ ...items[0], x, y, w, h });
+    return;
+  }
+  const total = items.reduce((s, i) => s + i.weight, 0);
+  let split = 0, acc = 0;
+  const half = total / 2;
+  while (split < items.length - 1 && acc + items[split].weight <= half) {
+    acc += items[split].weight;
+    split++;
+  }
+  const headItems = items.slice(0, split || 1);
+  const tailItems = items.slice(split || 1);
+  const headWeight = headItems.reduce((s, i) => s + i.weight, 0);
+  const frac = total ? headWeight / total : 0.5;
+  if (w >= h) {
+    const wa = w * frac;
+    squarify(headItems, x, y, wa, h, out);
+    squarify(tailItems, x + wa, y, w - wa, h, out);
+  } else {
+    const ha = h * frac;
+    squarify(headItems, x, y, w, ha, out);
+    squarify(tailItems, x, y + ha, w, h - ha, out);
+  }
+}
+
+function renderMarketsTreemap() {
+  const el = document.getElementById("markets-treemap");
+  if (!el) return;
+  const rows = marketsRows.filter((r) => r.change_pct !== null && r.change_pct !== undefined).slice(0, 18);
+  if (!rows.length) { el.innerHTML = ""; return; }
+
+  const items = rows
+    .map((r) => ({ code: r.code, pct: r.change_pct, weight: 1 + Math.abs(r.change_pct) * 1.6 }))
+    .sort((a, b) => b.weight - a.weight);
+
+  const W = 340, H = 300;
+  const boxes = [];
+  squarify(items, 0, 0, W, H, boxes);
+
+  // Opacity carries magnitude; 1.5% is treated as a "big" day for an index,
+  // so anything at or past it saturates rather than scaling off a daily max
+  // (which would make a calm day look identical to a violent one).
+  const cells = boxes.map((b) => {
+    const mag = Math.min(Math.abs(b.pct) / 1.5, 1);
+    const opacity = (0.20 + mag * 0.62).toFixed(2);
+    const fill = b.pct >= 0 ? "var(--positive)" : "var(--negative)";
+    const showLabel = b.w > 46 && b.h > 26;
+    const showPct = b.w > 60 && b.h > 42;
+    const cx = b.x + b.w / 2;
+    return `<g>` +
+      `<rect x="${b.x.toFixed(1)}" y="${b.y.toFixed(1)}" width="${Math.max(0, b.w - 2).toFixed(1)}" height="${Math.max(0, b.h - 2).toFixed(1)}" ` +
+      `rx="4" fill="${fill}" fill-opacity="${opacity}"/>` +
+      (showLabel
+        ? `<text x="${cx.toFixed(1)}" y="${(b.y + b.h / 2 - (showPct ? 5 : 0)).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" ` +
+          `font-size="10" font-weight="700" fill="var(--text-primary)">${escapeHtml(b.code)}</text>`
+        : "") +
+      (showPct
+        ? `<text x="${cx.toFixed(1)}" y="${(b.y + b.h / 2 + 9).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" ` +
+          `font-size="9" fill="var(--text-secondary)">${(b.pct > 0 ? "+" : "") + b.pct.toFixed(2)}%</text>`
+        : "") +
+      `<title>${escapeHtml(b.code)} ${(b.pct > 0 ? "+" : "") + b.pct.toFixed(2)}%</title>` +
+      `</g>`;
+  }).join("");
+
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${cells}</svg>`;
+}
+
+function renderMarketsRegions() {
+  const wrap = document.getElementById("markets-regions");
+  if (!wrap) return;
+  if (!marketsRows.length) {
+    // Most likely cause by far is Yahoo rate-limiting this IP, so say that
+    // plainly instead of leaving an empty panel that looks broken.
+    wrap.innerHTML =
+      `<div class="card"><div class="panel-body">` +
+      `No market data yet.\n\n` +
+      `${escapeHtml(marketsLastError || "The upstream feed did not return any instruments.")}\n\n` +
+      `Yahoo rate-limits by IP, and this board covers the whole global index list. If the terminal ` +
+      `has been polling hard, give it a few minutes — the board keeps retrying and comes back on its own.` +
+      `</div></div>`;
+    return;
+  }
+  const regions = [...new Set(marketsRows.map((r) => r.region))];
+  wrap.innerHTML = regions.map((region) => {
+    const rows = marketsRows.filter((r) => r.region === region);
+    const body = rows.map((r) => {
+      const dayCls = marketsDirClass(r.change_pct);
+      return `<tr data-ticker="${escapeHtml(r.ticker)}">` +
+        `<td class="mkt-name-cell"><div class="mkt-name-code">${escapeHtml(r.code)}</div>` +
+        `<div class="mkt-name-label">${escapeHtml(r.label)}</div></td>` +
+        `<td class="c-num">${fmtIndexValue(r.price)}</td>` +
+        `<td class="c-num ${dayCls}">${marketsArrow(r.change)}${fmtMagnitude(r.change)}</td>` +
+        `<td class="c-num ${dayCls}">${marketsArrow(r.change_pct)}${fmtMagnitude(r.change_pct, 2, "%")}</td>` +
+        `<td class="c-num ${marketsDirClass(r.change_1m_pct)}">${marketsArrow(r.change_1m_pct)}${fmtMagnitude(r.change_1m_pct, 2, "%")}</td>` +
+        `<td class="c-num ${marketsDirClass(r.change_1y_pct)}">${marketsArrow(r.change_1y_pct)}${fmtMagnitude(r.change_1y_pct, 2, "%")}</td>` +
+        `<td class="mkt-time">${fmtMarketTime(r.market_time)}</td>` +
+        `</tr>`;
+    }).join("");
+    return `<div class="card"><div class="card-head"><h3 class="mkt-region-title">${escapeHtml(region)}</h3></div>` +
+      `<div class="table-scroll"><table class="mkt-table"><thead><tr>` +
+      `<th>Name</th><th class="c-num">Value</th><th class="c-num">Change</th><th class="c-num">% Change</th>` +
+      `<th class="c-num">1 Month</th><th class="c-num">1 Year</th><th class="mkt-time">Time</th>` +
+      `</tr></thead><tbody>${body}</tbody></table></div></div>`;
+  }).join("");
+}
+
+function flashMarketTicks() {
+  marketsRows.forEach((r) => {
+    const prev = marketsLastPrice[r.ticker];
+    if (prev !== undefined && r.price !== null && r.price !== prev) {
+      const row = document.querySelector(`#markets-regions tr[data-ticker="${CSS.escape(r.ticker)}"]`);
+      if (row) {
+        const cls = r.price > prev ? "mkt-tick-up" : "mkt-tick-down";
+        row.classList.remove("mkt-tick-up", "mkt-tick-down");
+        void row.offsetWidth; // restart the animation
+        row.classList.add(cls);
+      }
+    }
+    if (r.price !== null && r.price !== undefined) marketsLastPrice[r.ticker] = r.price;
+  });
+}
+
+function renderMarketsStatus() {
+  const el = document.getElementById("markets-status");
+  if (!el) return;
+  if (marketsLastError && !marketsRows.length) {
+    el.innerHTML = `<span class="live-dot error"></span>${escapeHtml(marketsLastError)}`;
+    el.classList.add("error");
+    return;
+  }
+  el.classList.remove("error");
+  const age = marketsAsOf ? Math.max(0, Math.round(Date.now() / 1000 - marketsAsOf)) : null;
+  const paused = marketsRefreshMs === 0;
+  const dot = paused ? "" : `<span class="live-dot${marketsStale ? " error" : ""}"></span>`;
+  const label = paused
+    ? "Auto-refresh off"
+    : `Live · ${marketsRows.length} instruments · updated ${age === null ? "—" : age + "s"} ago`;
+  const badges =
+    (marketsStale ? `<span class="markets-stale-badge">stale — last refresh failed</span>` : "") +
+    (marketsDegraded ? `<span class="markets-stale-badge">slow mode — batch feed unavailable, prices refresh every few minutes</span>` : "");
+  el.innerHTML = `${dot}${escapeHtml(label)} ${badges}`;
+}
+
+async function loadMarkets() {
+  try {
+    const data = await getJSON("/api/markets");
+    marketsRows = data.rows || [];
+    marketsAsOf = data.as_of;
+    marketsStale = !!data.stale;
+    marketsDegraded = !!data.degraded;
+    marketsLastError = null;
+    renderMarketsCards();
+    renderMarketsTreemap();
+    renderMarketsRegions();
+    flashMarketTicks();
+  } catch (err) {
+    marketsLastError = err.message;
+    // Only repaint the board as "empty" if we have nothing to show. If a
+    // previous snapshot is still on screen, leave it up -- a stale board
+    // beats a blank one -- and let the status line carry the failure.
+    if (!marketsRows.length) renderMarketsRegions();
+  }
+  renderMarketsStatus();
+}
+
+async function startMarketsLoop() {
+  for (;;) {
+    if (marketsRefreshMs === 0) { await sleep(500); continue; }
+    await sleep(marketsRefreshMs);
+    await waitForVisible();
+    // Only poll while the board is actually on screen — no point spending
+    // upstream budget refreshing a tab the user isn't looking at.
+    if (!document.getElementById("view-markets").classList.contains("active")) continue;
+    if (marketsRefreshMs === 0) continue;
+    await loadMarkets();
+  }
+}
+
+document.getElementById("markets-interval").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-ms]");
+  if (!btn) return;
+  marketsRefreshMs = parseInt(btn.dataset.ms, 10);
+  document.querySelectorAll("#markets-interval button").forEach((b) => b.classList.toggle("active", b === btn));
+  renderMarketsStatus();
+  if (marketsRefreshMs) loadMarkets();
+});
+
 // ---- journal (paper-trading log, merged in from the standalone Bullion Ledger
 //      page -- persisted server-side now via /api/journal instead of localStorage) --
 
@@ -1668,4 +1941,5 @@ loadWatchlist().then(startLiveWatchlistLoop);
 loadAlerts();
 loadNarrativeAvailability();
 startLiveChartLoop();
-setInterval(() => { renderWatchlistStatus(); renderChartSummary(); }, 1000); // ticks the "updated Ns ago" text between real polls
+startMarketsLoop();
+setInterval(() => { renderWatchlistStatus(); renderChartSummary(); renderMarketsStatus(); }, 1000); // ticks the "updated Ns ago" text between real polls

@@ -29,6 +29,7 @@
 
   <nav class="topnav" id="topnav">
     <button data-view="watchlist" class="active">Watchlist</button>
+    <button data-view="markets">Markets</button>
     <button data-view="fund">Fund</button>
     <button data-view="optimizer">Optimizer</button>
     <button data-view="journal">Journal</button>
@@ -164,6 +165,32 @@
           </div>
           <div id="backtest-output" class="panel-body">Loading…</div>
         </section>
+      </section>
+
+      <!-- ===== Markets: live global index board ===== -->
+      <section class="view" id="view-markets">
+        <div class="card" id="markets-card">
+          <div class="card-head">
+            <div>
+              <h2>Today in the Markets</h2>
+              <p class="status-line" id="markets-status" style="margin:2px 0 0">Loading…</p>
+            </div>
+            <div class="card-head-controls">
+              <div class="seg" id="markets-interval">
+                <button data-ms="5000" class="active">5s</button>
+                <button data-ms="10000">10s</button>
+                <button data-ms="0">Off</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="markets-top">
+            <div id="markets-cards" class="markets-cards"></div>
+            <div id="markets-treemap" class="markets-treemap" role="img" aria-label="Index performance heatmap"></div>
+          </div>
+        </div>
+
+        <div id="markets-regions"></div>
       </section>
 
       <!-- ===== Fund: whole-watchlist scan + allocation (not symbol-specific) ===== -->

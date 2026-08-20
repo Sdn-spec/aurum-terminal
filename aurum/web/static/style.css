@@ -459,6 +459,65 @@ th.c-num { text-align: right; }
 .debate-col.bull li::before { content: "▲"; position: absolute; left: 0; color: var(--positive); font-size: 0.62rem; top: 4px; }
 .debate-col.bear li::before { content: "▼"; position: absolute; left: 0; color: var(--negative); font-size: 0.62rem; top: 4px; }
 
+/* ---- markets board (live global index dashboard) ---- */
+.markets-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .markets-top { grid-template-columns: 1fr; } }
+
+.markets-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)); gap: 10px; }
+.mkt-card {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 11px 12px 6px;
+  display: flex; flex-direction: column; gap: 3px; min-width: 0; transition: border-color 0.2s, transform 0.16s var(--ease-out);
+}
+.mkt-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.mkt-card-code { font-family: var(--font-mono); font-size: 0.74rem; font-weight: 700; color: var(--text-primary); letter-spacing: 0.02em; }
+.mkt-card-name { font-size: 0.62rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mkt-card-value { font-family: var(--font-mono); font-size: 1.02rem; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; margin-top: 2px; }
+.mkt-card-value .mkt-ccy { font-size: 0.66rem; font-weight: 500; color: var(--text-muted); margin-left: 4px; }
+.mkt-card-chg { font-family: var(--font-mono); font-size: 0.78rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.mkt-card-spark { margin-top: 4px; height: 34px; position: relative; }
+.mkt-card-spark svg { width: 100%; height: 34px; display: block; }
+.mkt-spark-tag {
+  position: absolute; top: 0; right: 0; font-family: var(--font-mono); font-size: 0.56rem;
+  letter-spacing: 0.06em; color: var(--text-muted); background: var(--surface-2);
+  padding: 0 3px; border-radius: 3px; pointer-events: none;
+}
+
+.mkt-up { color: var(--positive); }
+.mkt-down { color: var(--negative); }
+.mkt-flat { color: var(--text-muted); }
+.mkt-arrow { font-size: 0.6em; vertical-align: 1px; margin-right: 2px; }
+
+.markets-treemap { display: block; width: 100%; }
+.markets-treemap svg { width: 100%; height: auto; display: block; border-radius: 10px; overflow: hidden; }
+.markets-treemap text { font-family: var(--font-mono); pointer-events: none; }
+
+.mkt-region-title {
+  font-family: var(--font-display); font-weight: 620; font-size: 1.02rem; margin: 0;
+}
+.mkt-table { width: 100%; border-collapse: collapse; min-width: 780px; }
+.mkt-table thead th {
+  text-align: left; font-size: 0.63rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted);
+  font-weight: 700; padding: 7px 8px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.mkt-table tbody td { padding: 9px 8px; border-bottom: 1px solid var(--border); font-size: 0.83rem; }
+.mkt-table tbody tr:last-child td { border-bottom: none; }
+.mkt-table tbody tr:hover { background: var(--surface-2); }
+.mkt-name-cell { min-width: 190px; }
+.mkt-name-code { font-family: var(--font-mono); font-weight: 700; font-size: 0.8rem; color: var(--text-primary); }
+.mkt-name-label { font-size: 0.66rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; margin-top: 1px; }
+.mkt-time { font-family: var(--font-mono); font-size: 0.74rem; color: var(--text-muted); white-space: nowrap; text-align: right; }
+
+/* a price that just changed briefly lifts, so you can see the board tick */
+.mkt-tick-up { animation: mktTickUp 0.9s ease-out; }
+.mkt-tick-down { animation: mktTickDown 0.9s ease-out; }
+@keyframes mktTickUp { 0% { background: var(--positive-soft); } 100% { background: transparent; } }
+@keyframes mktTickDown { 0% { background: var(--negative-soft); } 100% { background: transparent; } }
+
+.markets-stale-badge {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px;
+  font-family: var(--font-mono); font-size: 0.68rem; background: var(--accent-wash); color: var(--accent-strong);
+}
+
 /* ---- journal panel (paper-trading log) ---- */
 .stats-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
 .stat-tile { background: var(--surface-solid); padding: 16px; display: flex; flex-direction: column; gap: 6px; }

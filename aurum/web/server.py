@@ -10,6 +10,7 @@ Then open http://127.0.0.1:8000 in a browser.
 import asyncio
 import dataclasses
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -20,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..alerts import store as alerts_store
 from ..backtest.adapter import run_strategy
-from ..datafeed import cache, finnhub, fred, universe, watchlist_store, yahoo
+from ..datafeed import cache, finnhub, fred, markets, universe, watchlist_store, yahoo
 from ..decision import memo as decision_memo
 from ..forecast import baseline
 from ..journal import store as journal_store
@@ -290,6 +291,125 @@ async def delete_journal_trade(trade_id: str):
     except journal_store.TradeNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return _journal_dict(await asyncio.to_thread(journal_store.load_journal))
+
+
+# ---- global markets board -------------------------------------------------
+# Split into two refresh rates on purpose. The live leg is one batched Yahoo
+# call for all ~29 instruments and is cached here for a few seconds, so a
+# browser polling every 5s -- and ten browsers polling every 5s -- still costs
+# exactly one upstream request per window. The slow leg (1-month / 1-year
+# moves and the sparkline) comes from daily bars that only change once a day,
+# so it rides the existing 12h disk cache and is refreshed on its own timer.
+# Yahoo rate-limits an IP hard (verified live: ~25 unbatched chart calls in a
+# burst earns a multi-minute 429 on every endpoint), which is precisely why
+# the board is batched and server-cached rather than fetched per-tab.
+
+_MARKETS_SNAPSHOT_TTL_SECONDS = 5.0
+_MARKETS_STATS_TTL_SECONDS = 6 * 3600
+# After the batch endpoint fails, stop retrying it (and its cookie+crumb
+# handshake) on every single 5s refresh -- that turns one failure into a
+# steady stream of extra requests against an endpoint that is already
+# refusing us, which is the fastest way to stay rate-limited.
+_MARKETS_BATCH_COOLDOWN_SECONDS = 120.0
+# The fallback walks the board one symbol at a time, so its own cache TTL is
+# what decides how big a burst it can generate: at 45s (the default for the
+# watchlist's 7 symbols) a 29-instrument board would fire 29 upstream requests
+# every 45s. Slowing it to 3 minutes keeps the fallback usable without it
+# becoming the thing that gets the IP throttled.
+_MARKETS_FALLBACK_QUOTE_TTL_SECONDS = 180.0
+_markets_snapshot = {"rows": None, "at": 0.0, "error": None, "degraded": False, "batch_blocked_until": 0.0}
+_markets_stats = {"data": {}, "at": 0.0}
+_markets_snapshot_lock = threading.Lock()
+_markets_stats_lock = threading.Lock()
+
+
+def _refresh_markets_snapshot() -> None:
+    """Coalesced refresh: whoever holds the lock does the single upstream
+    call, everyone else reuses whatever it produced. On failure the previous
+    snapshot is kept (and its age reported) rather than blanking the board."""
+    with _markets_snapshot_lock:
+        if time.time() - _markets_snapshot["at"] < _MARKETS_SNAPSHOT_TTL_SECONDS:
+            return  # another request refreshed it while we waited for the lock
+        now = time.time()
+        batch_error = None
+        if now >= _markets_snapshot["batch_blocked_until"]:
+            try:
+                _markets_snapshot["rows"] = markets.fetch_board()
+                _markets_snapshot["at"] = time.time()
+                _markets_snapshot["error"] = None
+                _markets_snapshot["degraded"] = False
+                return
+            except yahoo.DataFeedError as e:
+                batch_error = str(e)
+                _markets_snapshot["batch_blocked_until"] = time.time() + _MARKETS_BATCH_COOLDOWN_SECONDS
+        # The batch endpoint needs a cookie+crumb session Yahoo does not always
+        # hand out. Rather than leaving the board empty, fall back to the
+        # per-symbol quote cache -- slower to freshen (see the TTL above), but
+        # it keeps the dashboard populated instead of blank.
+        try:
+            rows = markets.fetch_board_via_quote_cache(
+                lambda t: cache.get_quote(t, max_age_seconds=_MARKETS_FALLBACK_QUOTE_TTL_SECONDS)
+            )
+            _markets_snapshot["rows"] = rows
+            _markets_snapshot["at"] = time.time()
+            _markets_snapshot["error"] = None
+            _markets_snapshot["degraded"] = True
+        except yahoo.DataFeedError as e:
+            _markets_snapshot["error"] = f"{batch_error or 'batch on cooldown'}; fallback also failed: {e}"
+
+
+def _refresh_markets_stats() -> None:
+    with _markets_stats_lock:
+        if _markets_stats["data"] and time.time() - _markets_stats["at"] < _MARKETS_STATS_TTL_SECONDS:
+            return
+        data = {}
+        for idx in markets.INDICES:
+            try:
+                bars = cache.get_history(idx.ticker, range_="1y", interval="1d", max_age_hours=12.0)
+            except yahoo.DataFeedError:
+                continue  # one unavailable index shouldn't blank the column for the rest
+            data[idx.ticker] = markets.compute_history_stats(bars)
+        if data:
+            _markets_stats["data"] = data
+            _markets_stats["at"] = time.time()
+
+
+def _markets_payload() -> dict:
+    rows = _markets_snapshot["rows"] or []
+    stats = _markets_stats["data"]
+    out = []
+    for row in rows:
+        d = dataclasses.asdict(row)
+        d.update(stats.get(row.ticker) or {"change_1m_pct": None, "change_1y_pct": None, "spark": []})
+        out.append(d)
+    age = time.time() - _markets_snapshot["at"] if _markets_snapshot["at"] else None
+    return {
+        "regions": markets.REGIONS,
+        "rows": out,
+        "as_of": _markets_snapshot["at"] or None,
+        "age_seconds": age,
+        # "stale" means the last refresh attempt failed and this is the
+        # previous snapshot -- the board stays readable, just marked.
+        "stale": bool(_markets_snapshot["error"]) and bool(rows),
+        # True when the board is being served from the slower per-symbol
+        # fallback rather than the batched endpoint -- prices are real but
+        # refresh far less often, and the UI says so rather than implying
+        # a 5s cadence it isn't actually delivering.
+        "degraded": bool(_markets_snapshot["degraded"]) and bool(rows),
+        "error": _markets_snapshot["error"] if not rows else None,
+    }
+
+
+@app.get("/api/markets")
+async def get_markets():
+    if time.time() - _markets_snapshot["at"] >= _MARKETS_SNAPSHOT_TTL_SECONDS:
+        await asyncio.to_thread(_refresh_markets_snapshot)
+    if not _markets_stats["data"] or time.time() - _markets_stats["at"] >= _MARKETS_STATS_TTL_SECONDS:
+        await asyncio.to_thread(_refresh_markets_stats)
+    payload = _markets_payload()
+    if not payload["rows"] and payload["error"]:
+        raise HTTPException(status_code=502, detail=payload["error"])
+    return payload
 
 
 @app.get("/api/quote/{name}")

@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 import zlib
 from pathlib import Path
@@ -15,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastapi.testclient import TestClient
 
 from aurum.alerts import store as alerts_store
-from aurum.datafeed import cache, finnhub, fred, provider, watchlist_store, yahoo
+from aurum.datafeed import cache, finnhub, fred, markets, provider, watchlist_store, yahoo
 from aurum.journal import store as journal_store
 from aurum.web import server
 
@@ -176,6 +177,120 @@ class TestWebServer(unittest.TestCase):
     def test_alerts_delete_unknown_returns_404(self):
         res = self.client.delete("/api/alerts/notreal")
         self.assertEqual(res.status_code, 404)
+
+    def _reset_markets_caches(self):
+        server._markets_snapshot.update(
+            {"rows": None, "at": 0.0, "error": None, "degraded": False, "batch_blocked_until": 0.0}
+        )
+        server._markets_stats.update({"data": {}, "at": 0.0})
+
+    def test_markets_batch_is_not_retried_on_every_refresh_after_it_fails(self):
+        """A failing batch endpoint must not mean a fresh cookie+crumb attempt
+        every 5 seconds -- that is how one failure becomes a rate-limit spiral."""
+        self._reset_markets_caches()
+        fallback_rows = [markets.MarketRow(code="SPX", label="S&P 500", ticker="^GSPC",
+                                           region="Americas", price=1.0)]
+        with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("429")) as batch, \
+             patch.object(markets, "fetch_board_via_quote_cache", return_value=fallback_rows), \
+             patch.object(server, "_refresh_markets_stats"):
+            self.client.get("/api/markets")
+            server._markets_snapshot["at"] = 0.0  # expire the snapshot
+            self.client.get("/api/markets")
+            server._markets_snapshot["at"] = 0.0
+            self.client.get("/api/markets")
+        # three refreshes, but the batch endpoint was only attempted once
+        self.assertEqual(batch.call_count, 1)
+
+    def test_markets_marks_itself_degraded_while_on_the_fallback(self):
+        self._reset_markets_caches()
+        fallback_rows = [markets.MarketRow(code="SPX", label="S&P 500", ticker="^GSPC",
+                                           region="Americas", price=1.0)]
+        with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("429")), \
+             patch.object(markets, "fetch_board_via_quote_cache", return_value=fallback_rows), \
+             patch.object(server, "_refresh_markets_stats"):
+            res = self.client.get("/api/markets")
+        self.assertTrue(res.json()["degraded"])
+
+    def test_markets_board_returns_rows_grouped_by_region(self):
+        self._reset_markets_caches()
+        rows = [
+            markets.MarketRow(code="SPX", label="S&P 500 INDEX", ticker="^GSPC", region="Americas",
+                              price=5000.0, previous_close=4950.0, change=50.0, change_pct=1.01, currency="USD",
+                              market_time=1_700_000_000)
+        ]
+        with patch.object(markets, "fetch_board", return_value=rows), \
+             patch.object(server, "_refresh_markets_stats"):
+            res = self.client.get("/api/markets")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["regions"], markets.REGIONS)
+        self.assertEqual(len(body["rows"]), 1)
+        self.assertEqual(body["rows"][0]["code"], "SPX")
+        self.assertFalse(body["stale"])
+        self.assertIsNotNone(body["as_of"])
+
+    def test_markets_board_is_cached_so_repeat_calls_dont_refetch(self):
+        self._reset_markets_caches()
+        rows = [markets.MarketRow(code="SPX", label="S&P 500", ticker="^GSPC", region="Americas", price=1.0)]
+        with patch.object(markets, "fetch_board", return_value=rows) as fetch, \
+             patch.object(server, "_refresh_markets_stats"):
+            self.client.get("/api/markets")
+            self.client.get("/api/markets")
+            self.client.get("/api/markets")
+        # three client calls inside the 5s TTL must collapse to one upstream fetch
+        self.assertEqual(fetch.call_count, 1)
+
+    def test_markets_board_serves_stale_rows_when_a_refresh_fails(self):
+        self._reset_markets_caches()
+        rows = [markets.MarketRow(code="SPX", label="S&P 500", ticker="^GSPC", region="Americas", price=1.0)]
+        with patch.object(markets, "fetch_board", return_value=rows), \
+             patch.object(server, "_refresh_markets_stats"):
+            self.client.get("/api/markets")
+        # force the cache to look expired, then make BOTH upstream paths fail
+        # (the batch endpoint and the per-symbol fallback it degrades to)
+        server._markets_snapshot["at"] = 0.0
+        with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("rate limited")), \
+             patch.object(markets, "fetch_board_via_quote_cache", side_effect=yahoo.DataFeedError("also rate limited")), \
+             patch.object(server, "_refresh_markets_stats"):
+            res = self.client.get("/api/markets")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertTrue(body["stale"])
+        self.assertEqual(len(body["rows"]), 1)  # previous snapshot still served
+
+    def test_markets_board_returns_502_when_it_has_nothing_at_all(self):
+        self._reset_markets_caches()
+        with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("rate limited")), \
+             patch.object(markets, "fetch_board_via_quote_cache", side_effect=yahoo.DataFeedError("also rate limited")), \
+             patch.object(server, "_refresh_markets_stats"):
+            res = self.client.get("/api/markets")
+        self.assertEqual(res.status_code, 502)
+
+    def test_markets_board_falls_back_to_per_symbol_quotes_when_batch_fails(self):
+        self._reset_markets_caches()
+        fallback_rows = [markets.MarketRow(code="SPX", label="S&P 500", ticker="^GSPC",
+                                           region="Americas", price=4242.0)]
+        with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("no crumb")), \
+             patch.object(markets, "fetch_board_via_quote_cache", return_value=fallback_rows) as fb, \
+             patch.object(server, "_refresh_markets_stats"):
+            res = self.client.get("/api/markets")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(fb.call_count, 1)
+        self.assertEqual(body["rows"][0]["price"], 4242.0)
+        self.assertFalse(body["stale"])  # the fallback succeeded, so this is fresh data
+
+    def test_markets_board_merges_history_stats_onto_rows(self):
+        self._reset_markets_caches()
+        rows = [markets.MarketRow(code="SPX", label="S&P 500", ticker="^GSPC", region="Americas", price=5000.0)]
+        server._markets_stats["data"] = {"^GSPC": {"change_1m_pct": 2.5, "change_1y_pct": 18.0, "spark": [1.0, 2.0]}}
+        server._markets_stats["at"] = time.time()
+        with patch.object(markets, "fetch_board", return_value=rows):
+            res = self.client.get("/api/markets")
+        row = res.json()["rows"][0]
+        self.assertEqual(row["change_1m_pct"], 2.5)
+        self.assertEqual(row["change_1y_pct"], 18.0)
+        self.assertEqual(row["spark"], [1.0, 2.0])
 
     def test_journal_empty_by_default(self):
         res = self.client.get("/api/journal")
