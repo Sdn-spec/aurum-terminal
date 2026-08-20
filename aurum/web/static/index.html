@@ -31,6 +31,7 @@
     <button data-view="watchlist" class="active">Watchlist</button>
     <button data-view="fund">Fund</button>
     <button data-view="optimizer">Optimizer</button>
+    <button data-view="journal">Journal</button>
   </nav>
 
   <div id="body">
@@ -202,6 +203,168 @@
           <div class="card-head"><h2>Correlation</h2></div>
           <p class="status-line">How closely each pair of symbols has moved together historically — positions that look diversified by name can still be riding the same trade.</p>
           <div id="correlation-output" class="panel-body">Loading…</div>
+        </div>
+      </section>
+
+      <!-- ===== Journal: paper-trading log, its own equity curve and setup breakdown ===== -->
+      <section class="view" id="view-journal">
+        <section class="stats-strip" id="journal-stats"></section>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>Equity curve</h2>
+              <p id="journal-chart-subtitle" class="status-line" style="margin:2px 0 0">Since $3,000.00 starting balance</p>
+            </div>
+          </div>
+          <div class="chart-wrap" id="journal-chart-wrap"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>Log a trade</h2>
+              <p class="status-line" style="margin:2px 0 0">Write down the reason before hindsight rewrites it for you.</p>
+            </div>
+          </div>
+          <form id="journal-form" class="ticket-grid" autocomplete="off">
+            <div class="field">
+              <label for="jf-date">Date &amp; time</label>
+              <input type="datetime-local" id="jf-date" name="date" required>
+            </div>
+            <div class="field">
+              <label for="jf-instrument">Instrument</label>
+              <input type="text" id="jf-instrument" name="instrument" list="journal-instrument-list" placeholder="Gold" required>
+              <datalist id="journal-instrument-list">
+                <option value="Gold"></option>
+                <option value="Silver"></option>
+                <option value="BTCUSD"></option>
+                <option value="EURUSD"></option>
+                <option value="SPY"></option>
+                <option value="QQQ"></option>
+              </datalist>
+            </div>
+            <div class="field">
+              <label for="jf-dir-group">Direction</label>
+              <div class="dir-toggle" id="jf-dir-group" role="group" aria-label="Direction">
+                <button type="button" class="dir-long" data-dir="long" aria-pressed="true">Long</button>
+                <button type="button" class="dir-short" data-dir="short" aria-pressed="false">Short</button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="jf-size">Size / units</label>
+              <input type="number" id="jf-size" name="size" step="any" placeholder="10">
+            </div>
+            <div class="field">
+              <label for="jf-entry">Entry price</label>
+              <input type="number" id="jf-entry" name="entry" step="any" placeholder="4405.89">
+            </div>
+            <div class="field">
+              <label for="jf-exit">Exit price</label>
+              <input type="number" id="jf-exit" name="exit" step="any" placeholder="4410.12">
+            </div>
+            <div class="field">
+              <label for="jf-pnl">P&amp;L (CAD)</label>
+              <input type="number" id="jf-pnl" name="pnl" step="any" placeholder="164.89" required>
+            </div>
+            <div class="field">
+              <label for="jf-risk">Risk $ <span class="hint">(optional &mdash; for R)</span></label>
+              <input type="number" id="jf-risk" name="risk" step="any" placeholder="20">
+            </div>
+            <div class="field">
+              <label for="jf-ema">50 EMA value <span class="hint">(optional)</span></label>
+              <input type="number" id="jf-ema" name="ema" step="any" placeholder="4392.10">
+            </div>
+            <div class="field">
+              <label for="jf-trend-group">Trend <span class="hint">(optional)</span></label>
+              <div class="dir-toggle" id="jf-trend-group" role="group" aria-label="Trend direction">
+                <button type="button" class="trend-up" data-trend="up" aria-pressed="false">Up</button>
+                <button type="button" class="trend-down" data-trend="down" aria-pressed="false">Down</button>
+                <button type="button" class="trend-flat" data-trend="flat" aria-pressed="false">Flat</button>
+              </div>
+            </div>
+            <div class="field span-2">
+              <label for="jf-setup">Setup / reason</label>
+              <select id="jf-setup" name="setup">
+                <option value="none">No defined setup</option>
+                <option value="support">Support / swing low</option>
+                <option value="ma">Pullback to moving average</option>
+                <option value="rsi">RSI oversold bounce</option>
+                <option value="breakout">Breakout</option>
+                <option value="news">News / catalyst</option>
+                <option value="other">Other (see notes)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="jf-conf-group">Confidence <span class="hint">(optional)</span></label>
+              <div class="confidence-row" id="jf-conf-group" role="group" aria-label="Confidence 1 to 5">
+                <button type="button" data-conf="1" aria-pressed="false">1</button>
+                <button type="button" data-conf="2" aria-pressed="false">2</button>
+                <button type="button" data-conf="3" aria-pressed="false">3</button>
+                <button type="button" data-conf="4" aria-pressed="false">4</button>
+                <button type="button" data-conf="5" aria-pressed="false">5</button>
+              </div>
+            </div>
+            <div class="field span-full">
+              <label for="jf-notes">Notes <span class="hint">&mdash; what did you actually see before entering?</span></label>
+              <textarea id="jf-notes" name="notes" placeholder="e.g. price tapped the Aug 14 swing low on falling volume, RSI turning up from 28..."></textarea>
+            </div>
+            <div class="ticket-submit">
+              <button type="submit" class="btn-glow">Add to ledger</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>What's actually working</h2>
+              <p class="status-line" style="margin:2px 0 0">Win rate and P&amp;L grouped by the reason you gave for the trade.</p>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Setup</th>
+                  <th class="c-num">Trades</th>
+                  <th class="c-num">Win rate</th>
+                  <th class="c-num">Total P&amp;L</th>
+                  <th class="c-num">Avg P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody id="journal-setup-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>Trade log</h2>
+              <p id="journal-trade-count" class="status-line" style="margin:2px 0 0">0 trades</p>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Instrument</th>
+                  <th>Dir</th>
+                  <th class="c-num">Size</th>
+                  <th class="c-num">Entry &rarr; Exit</th>
+                  <th>Setup</th>
+                  <th class="c-num">R</th>
+                  <th class="c-num">P&amp;L</th>
+                  <th>Outcome</th>
+                  <th></th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="journal-trade-tbody"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 

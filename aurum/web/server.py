@@ -23,6 +23,7 @@ from ..backtest.adapter import run_strategy
 from ..datafeed import cache, finnhub, fred, universe, watchlist_store, yahoo
 from ..decision import memo as decision_memo
 from ..forecast import baseline
+from ..journal import store as journal_store
 from ..llm import groq_client
 from ..optimize import engine as optimize_engine
 from ..report import analyzer
@@ -255,6 +256,40 @@ async def delete_alert(alert_id: str):
     except alerts_store.AlertNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"removed": alert_id}
+
+
+# ---- trade journal (paper-trading log, merged in from the standalone
+# Bullion Ledger page -- see aurum/journal/store.py) ------------------------
+
+
+def _journal_dict(journal: dict) -> dict:
+    return {
+        "starting_equity": journal["starting_equity"],
+        "trades": [dataclasses.asdict(t) for t in journal["trades"]],
+    }
+
+
+@app.get("/api/journal")
+async def get_journal():
+    return _journal_dict(await asyncio.to_thread(journal_store.load_journal))
+
+
+@app.post("/api/journal")
+async def post_journal_trade(payload: dict):
+    try:
+        await asyncio.to_thread(journal_store.add_trade, **payload)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return _journal_dict(await asyncio.to_thread(journal_store.load_journal))
+
+
+@app.delete("/api/journal/{trade_id}")
+async def delete_journal_trade(trade_id: str):
+    try:
+        await asyncio.to_thread(journal_store.remove_trade, trade_id)
+    except journal_store.TradeNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return _journal_dict(await asyncio.to_thread(journal_store.load_journal))
 
 
 @app.get("/api/quote/{name}")

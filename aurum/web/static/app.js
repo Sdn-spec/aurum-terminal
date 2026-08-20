@@ -93,6 +93,7 @@ function switchView(viewName) {
     requestAnimationFrame(() => { resizePriceChart(); resizeBacktestChart(); });
   }
   if (viewName === "optimizer") loadCorrelation();
+  if (viewName === "journal") loadJournal();
 }
 document.getElementById("topnav").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-view]");
@@ -1265,6 +1266,400 @@ document.getElementById("run-fund").addEventListener("click", async () => {
     summary.textContent = "Error: " + err.message;
   }
 });
+
+// ---- journal (paper-trading log, merged in from the standalone Bullion Ledger
+//      page -- persisted server-side now via /api/journal instead of localStorage) --
+
+const JOURNAL_SETUP_LABELS = {
+  none: "No defined setup",
+  support: "Support / swing low",
+  ma: "Pullback to MA",
+  rsi: "RSI oversold bounce",
+  breakout: "Breakout",
+  news: "News / catalyst",
+  other: "Other",
+};
+
+let journalState = { starting_equity: 3000, trades: [] };
+let journalSelectedDir = "long";
+let journalSelectedConf = null;
+let journalSelectedTrend = null;
+
+function journalOutcomeOf(t) {
+  const p = Number(t.pnl) || 0;
+  if (p > 0.004) return "win";
+  if (p < -0.004) return "loss";
+  return "breakeven";
+}
+function journalRMultiple(t) {
+  const risk = Number(t.risk);
+  if (!risk || risk <= 0) return null;
+  return (Number(t.pnl) || 0) / risk;
+}
+function journalMean(arr) {
+  if (!arr.length) return 0;
+  return arr.reduce((s, v) => s + v, 0) / arr.length;
+}
+function journalFmtDateShort(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+function journalSortedChrono() {
+  return journalState.trades.slice().sort((a, b) => new Date(a.ts) - new Date(b.ts));
+}
+function journalSortedRecent() {
+  return journalState.trades.slice().sort((a, b) => new Date(b.ts) - new Date(a.ts));
+}
+
+function journalComputeStats() {
+  const trades = journalState.trades;
+  const total = trades.length;
+  const startEquity = journalState.starting_equity;
+  let pnlSum = 0;
+  const wins = [], losses = [];
+  for (const t of trades) {
+    const p = Number(t.pnl) || 0;
+    pnlSum += p;
+    const o = journalOutcomeOf(t);
+    if (o === "win") wins.push(p);
+    else if (o === "loss") losses.push(p);
+  }
+  const equity = startEquity + pnlSum;
+  const returnPct = (equity - startEquity) / startEquity * 100;
+  const winRate = total ? (wins.length / total * 100) : 0;
+  let best = null, worst = null;
+  for (const t of trades) {
+    const p = Number(t.pnl) || 0;
+    if (best === null || p > best.pnl) best = t;
+    if (worst === null || p < worst.pnl) worst = t;
+  }
+  return {
+    total, equity, returnPct, winRate, startEquity,
+    avgWin: journalMean(wins), avgLoss: journalMean(losses),
+    expectancy: total ? pnlSum / total : 0,
+    best, worst, wins: wins.length, losses: losses.length,
+  };
+}
+
+function renderJournalStats() {
+  const s = journalComputeStats();
+  const el = document.getElementById("journal-stats");
+  if (!el) return;
+  const equityUp = s.equity >= s.startEquity;
+  const tiles = [
+    { label: "Equity", value: fmtPlain(s.equity), sub: fmtPct(s.returnPct) + " since " + fmtPlain(s.startEquity), subClass: equityUp ? "pos" : "neg", hero: true },
+    { label: "Win rate", value: s.total ? s.winRate.toFixed(0) + "%" : "—", sub: s.total ? `${s.wins}W / ${s.losses}L` : "no trades yet" },
+    { label: "Avg win / avg loss", value: (s.wins ? fmtMoney(s.avgWin) : "—") + " / " + (s.losses ? fmtMoney(s.avgLoss) : "—"), sub: "per trade" },
+    { label: "Expectancy", value: fmtMoney(s.expectancy), sub: "avg P&L per trade", subClass: s.expectancy >= 0 ? "pos" : "neg" },
+    { label: "Best / worst trade", value: (s.best ? fmtMoney(s.best.pnl) : "—") + " / " + (s.worst ? fmtMoney(s.worst.pnl) : "—"), sub: "single trade" },
+    { label: "Trades logged", value: String(s.total), sub: s.total ? "all time" : "log your first below" },
+  ];
+  el.innerHTML = tiles.map((t) =>
+    `<div class="stat-tile${t.hero ? " hero" : ""}">` +
+    `<span class="stat-label">${escapeHtml(t.label)}</span>` +
+    `<span class="stat-value">${t.value}</span>` +
+    `<span class="stat-sub${t.subClass ? " " + t.subClass : ""}">${escapeHtml(t.sub)}</span>` +
+    `</div>`
+  ).join("");
+}
+
+function renderJournalChart() {
+  const wrap = document.getElementById("journal-chart-wrap");
+  const subtitle = document.getElementById("journal-chart-subtitle");
+  if (!wrap) return;
+  const chrono = journalSortedChrono();
+  const startEquity = journalState.starting_equity;
+  if (subtitle) {
+    if (chrono.length) {
+      const first = journalFmtDateShort(chrono[0].ts).split(",")[0];
+      const last = journalFmtDateShort(chrono[chrono.length - 1].ts).split(",")[0];
+      subtitle.textContent = `Since ${fmtPlain(startEquity)} starting balance · ${first} – ${last} · ${chrono.length} trade${chrono.length === 1 ? "" : "s"}`;
+    } else {
+      subtitle.textContent = `Since ${fmtPlain(startEquity)} starting balance`;
+    }
+  }
+  if (!chrono.length) {
+    wrap.innerHTML = '<div class="chart-empty">No trades logged yet — your equity curve starts as soon as you add one below.</div>';
+    return;
+  }
+  const points = [{ equity: startEquity, ts: null, pnl: 0 }];
+  let running = startEquity;
+  for (const t of chrono) {
+    running += Number(t.pnl) || 0;
+    points.push({ equity: running, ts: t.ts, pnl: t.pnl, instrument: t.instrument });
+  }
+  const W = 640, H = 220, padL = 56, padR = 70, padT = 16, padB = 16;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const values = points.map((p) => p.equity);
+  let minV = Math.min(...values), maxV = Math.max(...values);
+  if (minV === maxV) { minV -= 10; maxV += 10; }
+  let range = maxV - minV;
+  minV -= range * 0.08; maxV += range * 0.08;
+  range = maxV - minV;
+
+  const xAt = (i) => padL + (points.length === 1 ? plotW : (i / (points.length - 1)) * plotW);
+  const yAt = (v) => padT + plotH - ((v - minV) / range) * plotH;
+
+  const coords = points.map((p, i) => ({ x: xAt(i), y: yAt(p.equity), p }));
+  const linePath = coords.map((c, i) => (i === 0 ? "M" : "L") + c.x.toFixed(2) + "," + c.y.toFixed(2)).join(" ");
+  const baseline = padT + plotH;
+  const areaPath = linePath + " L" + coords[coords.length - 1].x.toFixed(2) + "," + baseline + " L" + coords[0].x.toFixed(2) + "," + baseline + " Z";
+
+  const gridSteps = [minV + range * 0.15, minV + range * 0.5, minV + range * 0.85];
+  const gridLines = gridSteps.map((v) => {
+    const y = yAt(v).toFixed(2);
+    return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="var(--border)" stroke-width="1" />` +
+      `<text x="${padL - 8}" y="${y}" text-anchor="end" dominant-baseline="middle" font-family="var(--font-mono)" font-size="10" fill="var(--text-muted)">${fmtPlain(v)}</text>`;
+  }).join("");
+
+  const last = coords[coords.length - 1];
+  const endLabel = fmtPlain(last.p.equity);
+
+  wrap.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Equity curve, currently ${endLabel}">` +
+    gridLines +
+    `<path d="${areaPath}" fill="var(--accent)" fill-opacity="0.10" stroke="none" />` +
+    `<path d="${linePath}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />` +
+    `<circle cx="${last.x.toFixed(2)}" cy="${last.y.toFixed(2)}" r="5" fill="var(--accent)" stroke="var(--surface-solid)" stroke-width="2" />` +
+    `<text x="${(last.x + 9).toFixed(2)}" y="${(last.y - 6).toFixed(2)}" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--text-primary)">${endLabel}</text>` +
+    `<line id="journal-hover-line" x1="0" y1="${padT}" x2="0" y2="${baseline}" stroke="var(--text-muted)" stroke-width="1" opacity="0" />` +
+    `<circle id="journal-hover-dot" r="4.5" fill="var(--accent)" stroke="var(--surface-solid)" stroke-width="2" opacity="0" />` +
+    `<rect id="journal-hover-capture" x="${padL}" y="0" width="${plotW}" height="${H}" fill="transparent" />` +
+    `</svg>` +
+    `<div class="chart-tooltip" id="journal-chart-tooltip"></div>`;
+
+  const svgEl = wrap.querySelector("svg");
+  const hoverLine = document.getElementById("journal-hover-line");
+  const hoverDot = document.getElementById("journal-hover-dot");
+  const capture = document.getElementById("journal-hover-capture");
+  const tooltip = document.getElementById("journal-chart-tooltip");
+
+  function nearestIndex(clientX) {
+    const rect = svgEl.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const localX = (clientX - rect.left) * scaleX;
+    let best = 0, bestDist = Infinity;
+    coords.forEach((c, i) => { const d = Math.abs(c.x - localX); if (d < bestDist) { bestDist = d; best = i; } });
+    return best;
+  }
+  function showAt(i) {
+    const c = coords[i];
+    hoverLine.setAttribute("x1", c.x); hoverLine.setAttribute("x2", c.x); hoverLine.setAttribute("opacity", "1");
+    hoverDot.setAttribute("cx", c.x); hoverDot.setAttribute("cy", c.y); hoverDot.setAttribute("opacity", "1");
+    const rect = svgEl.getBoundingClientRect();
+    const scale = rect.width / W;
+    tooltip.style.left = (c.x * scale) + "px";
+    tooltip.style.top = (c.y * scale - 10) + "px";
+    const label = i === 0 ? "Start" : journalFmtDateShort(c.p.ts);
+    const pnlLine = i === 0 ? "" : `<div class="tt-pnl ${c.p.pnl >= 0 ? "pos" : "neg"}">${c.p.instrument ? escapeHtml(c.p.instrument) + " · " : ""}${fmtMoney(c.p.pnl)}</div>`;
+    tooltip.innerHTML = `<div>${escapeHtml(label)}</div><div>${fmtPlain(c.p.equity)}</div>${pnlLine}`;
+    tooltip.classList.add("visible");
+  }
+  function hide() { hoverLine.setAttribute("opacity", "0"); hoverDot.setAttribute("opacity", "0"); tooltip.classList.remove("visible"); }
+  capture.addEventListener("mousemove", (e) => showAt(nearestIndex(e.clientX)));
+  capture.addEventListener("mouseleave", hide);
+  capture.addEventListener("touchstart", (e) => { if (e.touches && e.touches[0]) showAt(nearestIndex(e.touches[0].clientX)); }, { passive: true });
+}
+
+function renderJournalSetupBreakdown() {
+  const tbody = document.getElementById("journal-setup-tbody");
+  if (!tbody) return;
+  const groups = {};
+  journalState.trades.forEach((t) => {
+    const key = t.setup || "none";
+    if (!groups[key]) groups[key] = { count: 0, wins: 0, total: 0 };
+    groups[key].count++;
+    groups[key].total += Number(t.pnl) || 0;
+    if (journalOutcomeOf(t) === "win") groups[key].wins++;
+  });
+  const rows = Object.keys(groups).map((key) => {
+    const g = groups[key];
+    return { key, label: JOURNAL_SETUP_LABELS[key] || key, count: g.count, winRate: g.count ? (g.wins / g.count * 100) : 0, total: g.total, avg: g.count ? g.total / g.count : 0 };
+  }).sort((a, b) => b.total - a.total);
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="detail-empty">No trades logged yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((r) =>
+    `<tr><td>${escapeHtml(r.label)}</td>` +
+    `<td class="c-num">${r.count}</td>` +
+    `<td class="c-num">${r.winRate.toFixed(0)}%</td>` +
+    `<td class="c-num ${r.total >= 0 ? "outcome-win" : "outcome-loss"}">${fmtMoney(r.total)}</td>` +
+    `<td class="c-num ${r.avg >= 0 ? "outcome-win" : "outcome-loss"}">${fmtMoney(r.avg)}</td></tr>`
+  ).join("");
+}
+
+function renderJournalTradeTable() {
+  const tbody = document.getElementById("journal-trade-tbody");
+  const countEl = document.getElementById("journal-trade-count");
+  if (!tbody) return;
+  const trades = journalSortedRecent();
+  if (countEl) countEl.textContent = `${trades.length} trade${trades.length === 1 ? "" : "s"}`;
+  if (!trades.length) {
+    tbody.innerHTML = '<tr><td colspan="11" class="detail-empty">Nothing logged yet — add your first trade above.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = trades.map((t) => {
+    const outcome = journalOutcomeOf(t);
+    const r = journalRMultiple(t);
+    const rDisplay = r === null ? "—" : (r >= 0 ? "+" : "") + r.toFixed(2) + "R";
+    const setupLabel = JOURNAL_SETUP_LABELS[t.setup] || t.setup || "—";
+    const entryExit = (t.entry != null && t.exit != null) ? `${t.entry} → ${t.exit}` : "—";
+    const notesHtml = t.notes ? escapeHtml(t.notes) : '<span class="detail-empty">No notes recorded.</span>';
+    const confHtml = t.confidence ? `${t.confidence} / 5` : "—";
+    const riskHtml = t.risk != null && t.risk !== "" ? fmtPlain(t.risk) : "—";
+    const emaHtml = t.ema != null ? fmtPlain(t.ema) : "—";
+    const trendHtml = t.trend === "up" ? "Up" : t.trend === "down" ? "Down" : t.trend === "flat" ? "Flat" : "—";
+    let emaDistHtml = "—";
+    if (t.entry != null && t.ema != null) {
+      const emaDist = t.entry - t.ema;
+      emaDistHtml = (emaDist >= 0 ? "+" : "") + emaDist.toFixed(2) + (emaDist >= 0 ? " above EMA" : " below EMA");
+    }
+    return `<tr class="trade-row" data-id="${t.id}">` +
+      `<td>${escapeHtml(journalFmtDateShort(t.ts))}</td>` +
+      `<td>${escapeHtml(t.instrument)}</td>` +
+      `<td><span class="dir-pill dir-${t.direction}">${t.direction === "long" ? "Long" : "Short"}</span></td>` +
+      `<td class="c-num">${t.size != null ? t.size : "—"}</td>` +
+      `<td class="c-num">${escapeHtml(entryExit)}</td>` +
+      `<td><span class="setup-chip">${escapeHtml(setupLabel)}</span></td>` +
+      `<td class="c-num">${rDisplay}</td>` +
+      `<td class="c-num outcome-${outcome}">${fmtMoney(t.pnl)}</td>` +
+      `<td><span class="pill pill-${outcome}">${outcome.toUpperCase()}</span></td>` +
+      `<td><button type="button" class="row-edit-btn" data-toggle="${t.id}" aria-expanded="false" style="width:auto;padding:4px 8px;font-size:0.72rem">Notes</button></td>` +
+      `<td><button type="button" class="row-delete-btn" data-delete="${t.id}" aria-label="Delete trade" style="width:26px">✕</button></td>` +
+      `</tr>` +
+      `<tr class="journal-detail" id="journal-detail-${t.id}" hidden><td colspan="11"><div class="journal-detail-inner">` +
+      `<div><span class="detail-label">Notes</span>${notesHtml}</div>` +
+      `<div><span class="detail-label">Confidence</span>${confHtml}</div>` +
+      `<div><span class="detail-label">Risked</span>${riskHtml}</div>` +
+      `<div><span class="detail-label">50 EMA</span>${emaHtml}</div>` +
+      `<div><span class="detail-label">Trend</span>${trendHtml}</div>` +
+      `<div><span class="detail-label">Entry vs EMA</span>${emaDistHtml}</div>` +
+      `</div></td></tr>`;
+  }).join("");
+
+  tbody.querySelectorAll("[data-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const row = document.getElementById("journal-detail-" + btn.getAttribute("data-toggle"));
+      if (!row) return;
+      const open = !row.hidden;
+      row.hidden = open;
+      btn.setAttribute("aria-expanded", String(!open));
+      btn.textContent = open ? "Notes" : "Hide";
+    });
+  });
+  tbody.querySelectorAll("[data-delete]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-delete");
+      if (!window.confirm("Delete this trade from the ledger?")) return;
+      journalState = await getJSON(`/api/journal/${id}`, { method: "DELETE" });
+      renderJournal();
+    });
+  });
+}
+
+function renderJournal() {
+  renderJournalStats();
+  renderJournalChart();
+  renderJournalSetupBreakdown();
+  renderJournalTradeTable();
+}
+
+async function loadJournal() {
+  journalState = await getJSON("/api/journal");
+  renderJournal();
+}
+
+function wireJournalDirToggle() {
+  const group = document.getElementById("jf-dir-group");
+  if (!group) return;
+  group.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      journalSelectedDir = btn.getAttribute("data-dir");
+      group.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+    });
+  });
+}
+function wireJournalConfidence() {
+  const group = document.getElementById("jf-conf-group");
+  if (!group) return;
+  group.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const val = btn.getAttribute("data-conf");
+      journalSelectedConf = journalSelectedConf === val ? null : val;
+      group.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.getAttribute("data-conf") === journalSelectedConf)));
+    });
+  });
+}
+function wireJournalTrend() {
+  const group = document.getElementById("jf-trend-group");
+  if (!group) return;
+  group.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const val = btn.getAttribute("data-trend");
+      journalSelectedTrend = journalSelectedTrend === val ? null : val;
+      group.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.getAttribute("data-trend") === journalSelectedTrend)));
+    });
+  });
+}
+function journalSetDefaultDate() {
+  const input = document.getElementById("jf-date");
+  if (!input) return;
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  input.value = now.toISOString().slice(0, 16);
+}
+function journalResetTicket(form) {
+  form.reset();
+  journalSelectedDir = "long";
+  journalSelectedConf = null;
+  journalSelectedTrend = null;
+  document.getElementById("jf-dir-group").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.getAttribute("data-dir") === "long")));
+  document.getElementById("jf-conf-group").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", "false"));
+  document.getElementById("jf-trend-group").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", "false"));
+  journalSetDefaultDate();
+}
+
+function wireJournalForm() {
+  const form = document.getElementById("journal-form");
+  if (!form) return;
+  wireJournalDirToggle();
+  wireJournalConfidence();
+  wireJournalTrend();
+  journalSetDefaultDate();
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const instrument = document.getElementById("jf-instrument").value.trim();
+    const dateVal = document.getElementById("jf-date").value;
+    const pnlVal = document.getElementById("jf-pnl").value;
+    if (!instrument || !dateVal || pnlVal === "") return;
+    const numOrNull = (id) => { const v = document.getElementById(id).value; return v === "" ? null : Number(v); };
+    const payload = {
+      ts: new Date(dateVal).toISOString(),
+      instrument,
+      direction: journalSelectedDir,
+      entry: numOrNull("jf-entry"),
+      exit: numOrNull("jf-exit"),
+      size: numOrNull("jf-size"),
+      pnl: Number(pnlVal),
+      risk: numOrNull("jf-risk"),
+      ema: numOrNull("jf-ema"),
+      trend: journalSelectedTrend,
+      setup: document.getElementById("jf-setup").value,
+      notes: document.getElementById("jf-notes").value.trim(),
+      confidence: journalSelectedConf ? Number(journalSelectedConf) : null,
+    };
+    journalState = await getJSON("/api/journal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    renderJournal();
+    journalResetTicket(form);
+  });
+}
+wireJournalForm();
 
 // ---- boot ---------------------------------------------------------------------
 

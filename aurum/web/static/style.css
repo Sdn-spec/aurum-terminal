@@ -459,6 +459,79 @@ th.c-num { text-align: right; }
 .debate-col.bull li::before { content: "▲"; position: absolute; left: 0; color: var(--positive); font-size: 0.62rem; top: 4px; }
 .debate-col.bear li::before { content: "▼"; position: absolute; left: 0; color: var(--negative); font-size: 0.62rem; top: 4px; }
 
+/* ---- journal panel (paper-trading log) ---- */
+.stats-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.stat-tile { background: var(--surface-solid); padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+.stat-label { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 700; }
+.stat-value { font-family: var(--font-mono); font-weight: 700; font-size: 1.3rem; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.stat-tile.hero .stat-value { font-size: 1.9rem; }
+.stat-sub { font-size: 0.76rem; color: var(--text-secondary); font-family: var(--font-mono); }
+.stat-sub.pos { color: var(--positive); }
+.stat-sub.neg { color: var(--negative); }
+
+.chart-wrap svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart-empty { color: var(--text-muted); font-size: 0.86rem; padding: 32px 0; text-align: center; }
+.chart-tooltip {
+  position: absolute; pointer-events: none; background: var(--surface-solid); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 10px; font-family: var(--font-mono); font-size: 0.76rem; line-height: 1.4;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.25); white-space: nowrap; opacity: 0; transform: translate(-50%, -100%);
+  transition: opacity 120ms ease; z-index: 5;
+}
+.chart-tooltip.visible { opacity: 1; }
+.chart-tooltip .tt-pnl.pos { color: var(--positive); }
+.chart-tooltip .tt-pnl.neg { color: var(--negative); }
+
+.ticket-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; align-items: end; }
+.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.field.span-2 { grid-column: span 2; }
+.field.span-full { grid-column: 1 / -1; }
+.field label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700; }
+.field .hint { font-size: 0.72rem; color: var(--text-muted); font-weight: 400; text-transform: none; letter-spacing: 0; margin-top: -2px; }
+.ticket-grid input, .ticket-grid select, .ticket-grid textarea {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);
+  padding: 8px 10px; font-size: 0.86rem; font-family: var(--font-mono); width: 100%;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.ticket-grid select, .ticket-grid textarea { font-family: var(--font-body); }
+.ticket-grid textarea { resize: vertical; min-height: 56px; }
+.ticket-grid input:focus-visible, .ticket-grid select:focus-visible, .ticket-grid textarea:focus-visible {
+  border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); outline: none;
+}
+.dir-toggle { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.dir-toggle button {
+  flex: 1; padding: 8px 10px; background: var(--surface-2); border: none; color: var(--text-secondary);
+  font-size: 0.86rem; font-weight: 700; cursor: pointer; border-right: 1px solid var(--border); transition: background 0.15s, color 0.15s;
+}
+.dir-toggle button:last-child { border-right: none; }
+.dir-toggle button[aria-pressed="true"].dir-long { background: var(--positive-soft); color: var(--positive-strong); }
+.dir-toggle button[aria-pressed="true"].dir-short { background: var(--negative-soft); color: var(--negative-strong); }
+.dir-toggle button[aria-pressed="true"].trend-up { background: var(--positive-soft); color: var(--positive-strong); }
+.dir-toggle button[aria-pressed="true"].trend-down { background: var(--negative-soft); color: var(--negative-strong); }
+.dir-toggle button[aria-pressed="true"].trend-flat { background: var(--surface-3); color: var(--text-secondary); }
+.confidence-row { display: flex; gap: 6px; }
+.confidence-row button {
+  width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text-muted); cursor: pointer; font-family: var(--font-mono); font-size: 0.8rem; transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.confidence-row button[aria-pressed="true"] { background: var(--accent-wash); color: var(--accent-strong); border-color: var(--border-strong); }
+.ticket-submit { display: flex; justify-content: flex-end; grid-column: 1 / -1; margin-top: 2px; }
+
+.outcome-win { color: var(--positive); }
+.outcome-loss { color: var(--negative); }
+.outcome-breakeven { color: var(--text-secondary); }
+.pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 0.66rem; font-weight: 700; letter-spacing: 0.03em; font-family: var(--font-mono); }
+.pill-win { background: var(--positive-soft); color: var(--positive-strong); }
+.pill-loss { background: var(--negative-soft); color: var(--negative-strong); }
+.pill-breakeven { background: var(--surface-3); color: var(--text-secondary); }
+.dir-pill { font-size: 0.76rem; font-weight: 700; }
+.dir-pill.dir-long { color: var(--positive); }
+.dir-pill.dir-short { color: var(--negative); }
+.setup-chip { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 0.72rem; background: var(--accent-wash); color: var(--accent-strong); white-space: nowrap; }
+tr.journal-detail td { background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.journal-detail-inner { display: flex; flex-direction: column; gap: 4px; padding: 6px 2px; font-size: 0.82rem; color: var(--text-secondary); }
+.journal-detail-inner .detail-label { color: var(--text-muted); font-weight: 700; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 6px; }
+.detail-empty { color: var(--text-muted); font-style: italic; }
+
 .horizon-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 6px 0; }
 @media (max-width: 720px) { .horizon-cards { grid-template-columns: 1fr; } }
 .horizon-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }

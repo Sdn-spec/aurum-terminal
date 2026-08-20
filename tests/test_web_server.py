@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from aurum.alerts import store as alerts_store
 from aurum.datafeed import cache, finnhub, fred, provider, watchlist_store, yahoo
+from aurum.journal import store as journal_store
 from aurum.web import server
 
 
@@ -78,6 +79,8 @@ class TestWebServer(unittest.TestCase):
         self._watchlist_patch.start()
         self._alerts_patch = patch.object(alerts_store, "ALERTS_PATH", Path(self._tmpdir.name) / "alerts.json")
         self._alerts_patch.start()
+        self._journal_patch = patch.object(journal_store, "JOURNAL_PATH", Path(self._tmpdir.name) / "journal.json")
+        self._journal_patch.start()
 
     def tearDown(self):
         self._state_patch.stop()
@@ -89,6 +92,7 @@ class TestWebServer(unittest.TestCase):
         self._fundamentals_cache_patch.stop()
         self._watchlist_patch.stop()
         self._alerts_patch.stop()
+        self._journal_patch.stop()
         self._tmpdir.cleanup()
 
     def test_index_serves_html(self):
@@ -171,6 +175,53 @@ class TestWebServer(unittest.TestCase):
 
     def test_alerts_delete_unknown_returns_404(self):
         res = self.client.delete("/api/alerts/notreal")
+        self.assertEqual(res.status_code, 404)
+
+    def test_journal_empty_by_default(self):
+        res = self.client.get("/api/journal")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["starting_equity"], journal_store.DEFAULT_STARTING_EQUITY)
+        self.assertEqual(body["trades"], [])
+
+    def test_journal_add_and_list(self):
+        res = self.client.post("/api/journal", json={
+            "instrument": "gold", "direction": "long", "pnl": 164.89, "ts": "2026-08-17T09:53:22",
+            "entry": 4394.0, "exit": 4405.89, "size": 10, "setup": "support", "notes": "swing low", "confidence": 4,
+        })
+        self.assertEqual(res.status_code, 200)
+        trades = res.json()["trades"]
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0]["instrument"], "gold")
+        self.assertEqual(trades[0]["setup"], "support")
+        self.assertTrue(trades[0]["id"])
+        # persisted -- a fresh GET reflects it too, not just the POST response
+        res = self.client.get("/api/journal")
+        self.assertEqual(len(res.json()["trades"]), 1)
+
+    def test_journal_add_rejects_bad_direction(self):
+        res = self.client.post("/api/journal", json={
+            "instrument": "GOLD", "direction": "sideways", "pnl": 1.0, "ts": "2026-08-17T09:53:22",
+        })
+        self.assertEqual(res.status_code, 422)
+
+    def test_journal_add_rejects_missing_pnl(self):
+        res = self.client.post("/api/journal", json={
+            "instrument": "GOLD", "direction": "long", "ts": "2026-08-17T09:53:22",
+        })
+        self.assertEqual(res.status_code, 422)
+
+    def test_journal_delete(self):
+        added = self.client.post("/api/journal", json={
+            "instrument": "GOLD", "direction": "long", "pnl": 1.0, "ts": "2026-08-17T09:53:22",
+        }).json()
+        trade_id = added["trades"][0]["id"]
+        res = self.client.delete(f"/api/journal/{trade_id}")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["trades"], [])
+
+    def test_journal_delete_unknown_returns_404(self):
+        res = self.client.delete("/api/journal/notreal")
         self.assertEqual(res.status_code, 404)
 
     def test_analyze_endpoint_previous_verdict_is_none_on_first_check(self):
