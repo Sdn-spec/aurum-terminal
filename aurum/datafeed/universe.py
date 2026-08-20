@@ -67,3 +67,14 @@ def display_name(symbol: str) -> str:
         if ticker == symbol:
             return name
     return symbol
+
+
+def is_commodity_or_index_alias(symbol: str) -> bool:
+    """True for the app's own built-in non-stock names (GOLD, SILVER, BTC,
+    SPX, ...). Finnhub's news/earnings/fundamentals endpoints are stock-
+    oriented and some of these collide with real, unrelated tickers on
+    Finnhub — "GOLD" is Gold.com Inc, a precious-metals distributor, not
+    the commodity — so callers use this to skip those providers for these
+    names rather than silently attributing a stranger's company data to
+    the instrument the user actually means."""
+    return symbol.upper() in ALIASES

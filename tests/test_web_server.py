@@ -275,19 +275,41 @@ class TestWebServer(unittest.TestCase):
         self.assertIsNone(body["earnings"])
 
     def test_analyze_endpoint_folds_in_macro_and_news_when_keys_are_configured(self):
+        # AAPL, not GOLD -- GOLD is this app's commodity alias and must never
+        # reach Finnhub (see the regression test below); a real stock ticker
+        # is the correct fixture for "the happy path where Finnhub is called."
         provider.CONFIG_PATH.write_text(json.dumps({"fred_api_key": "fake-fred", "finnhub_api_key": "fake-finnhub"}))
         fake_macro = [fred.MacroSeries(key="fed_funds_rate", series_id="DFF", label="Fed funds rate", latest_date="2026-08-01", latest_value=4.33, previous_value=4.58)]
-        fake_news = [finnhub.NewsItem(headline="Gold rallies", source="Reuters", url="https://example.com", published=1700000000)]
+        fake_news = [finnhub.NewsItem(headline="Apple unveils new product", source="Reuters", url="https://example.com", published=1700000000)]
         fake_earnings = finnhub.EarningsEvent(date="2026-11-05", eps_estimate=1.42, eps_actual=None)
         with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history), \
              patch("aurum.datafeed.fred.get_macro_snapshot", return_value=fake_macro), \
              patch("aurum.datafeed.finnhub.get_company_news", return_value=fake_news), \
              patch("aurum.datafeed.finnhub.get_next_earnings", return_value=fake_earnings):
-            res = self.client.get("/api/analyze/GOLD")
+            res = self.client.get("/api/analyze/AAPL")
         body = res.json()
         self.assertEqual(body["macro"][0]["key"], "fed_funds_rate")
-        self.assertEqual(body["news"][0]["headline"], "Gold rallies")
+        self.assertEqual(body["news"][0]["headline"], "Apple unveils new product")
         self.assertEqual(body["earnings"]["date"], "2026-11-05")
+
+    def test_analyze_endpoint_never_calls_finnhub_for_a_commodity_alias(self):
+        # Regression test: Finnhub's own ticker "GOLD" is Gold.com Inc, a real
+        # but completely unrelated company -- calling Finnhub with this app's
+        # "GOLD" (the commodity) would silently attribute that company's
+        # earnings/news to gold-the-instrument. universe.is_commodity_or_index_alias
+        # must keep this from ever reaching Finnhub, regardless of what it'd return.
+        provider.CONFIG_PATH.write_text(json.dumps({"finnhub_api_key": "fake-finnhub"}))
+        fake_news = [finnhub.NewsItem(headline="Unrelated company news", source="Reuters", url="https://example.com", published=1700000000)]
+        fake_earnings = finnhub.EarningsEvent(date="2026-11-05", eps_estimate=1.0, eps_actual=None)
+        with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history), \
+             patch("aurum.datafeed.finnhub.get_company_news", return_value=fake_news) as mock_news, \
+             patch("aurum.datafeed.finnhub.get_next_earnings", return_value=fake_earnings) as mock_earnings:
+            res = self.client.get("/api/analyze/GOLD")
+        body = res.json()
+        self.assertEqual(body["news"], [])
+        self.assertIsNone(body["earnings"])
+        mock_news.assert_not_called()
+        mock_earnings.assert_not_called()
 
     def test_macro_endpoint_returns_empty_list_when_no_key_configured(self):
         res = self.client.get("/api/macro")

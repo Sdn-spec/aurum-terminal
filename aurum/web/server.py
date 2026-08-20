@@ -56,6 +56,13 @@ def _get_macro_snapshot_cached() -> Optional[list]:
 
 
 def _get_news_and_earnings_cached(symbol: str):
+    # GOLD, SILVER, BTC, SPX, ... are this app's own commodity/index/crypto
+    # names, not Finnhub stock tickers — some of them collide with real,
+    # unrelated companies on Finnhub (GOLD is Gold.com Inc, a precious-metals
+    # distributor). Skip the call entirely rather than risk attributing a
+    # stranger's earnings/news to the instrument the user actually means.
+    if universe.is_commodity_or_index_alias(symbol):
+        return [], None
     api_key = finnhub.resolve_api_key()
     if not api_key:
         return [], None
