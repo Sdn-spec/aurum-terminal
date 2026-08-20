@@ -22,6 +22,7 @@ from ..datafeed import cache, universe, yahoo
 from ..decision import memo as decision_memo
 from ..forecast import baseline
 from ..optimize import engine as optimize_engine
+from ..report import analyzer
 from ..signals import scanner
 
 STATE_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "state.json"
@@ -61,6 +62,23 @@ def _memo_dict(memo) -> dict:
         "plan": _plan_dict(memo.plan),
         "verdict": memo.verdict,
         "reasons": memo.reasons,
+    }
+
+
+def _analysis_report_dict(report) -> dict:
+    return {
+        "symbol": report.symbol,
+        "last_close": report.last_close,
+        "research": _to_dict(report.research),
+        "debate": _to_dict(report.debate),
+        "scan": _to_dict(report.scan),
+        "risk": _risk_dict(report.risk),  # RiskAssessment.status is an @property, needs the same fix as _memo_dict
+        "day_trade": _to_dict(report.day_trade),
+        "long_term": _to_dict(report.long_term),
+        "verdict": report.verdict,
+        "confidence": report.confidence,
+        "score": report.score,
+        "summary": report.summary,
     }
 
 
@@ -259,6 +277,30 @@ async def get_fund():
         "approved_symbols": report.approved_symbols,
         "watchlist_symbols": report.watchlist_symbols,
     }
+
+
+# ---- one-input analysis report -------------------------------------------------
+
+
+@app.get("/api/analyze/{name}")
+async def get_analysis(name: str):
+    """The "type a symbol, get a verdict" endpoint: research + bull/bear
+    debate + risk check + day-trade and long-term plans, in one call. Works
+    for anything cache.get_history can fetch — the default watchlist names
+    or a raw ticker like AAPL — not just the commodities in DEFAULT_WATCHLIST."""
+    try:
+        bars = await asyncio.to_thread(cache.get_history, name, "10y", "1d")
+    except yahoo.DataFeedError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    state = _load_state()
+    try:
+        result = await asyncio.to_thread(
+            analyzer.analyze_symbol, name, bars, state["equity"], state["peak_equity"], state["realized_pnl_today"]
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return _analysis_report_dict(result)
 
 
 # ---- backtest -----------------------------------------------------------------

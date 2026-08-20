@@ -190,6 +190,8 @@ function selectSymbol(name) {
   document.querySelectorAll("#watchlist-body tr").forEach((r) => r.classList.toggle("selected", r.dataset.name === name));
   document.getElementById("chart-title").innerHTML = `${iconFor(name)} Chart — ${name}`;
   loadChart(name);
+  const analyzeInput = document.getElementById("analyze-symbol");
+  if (analyzeInput && !analyzeInput.value) analyzeInput.value = name;
 }
 
 // ---- chart (TradingView Lightweight Charts: candles, volume, EMA overlay,
@@ -398,6 +400,74 @@ document.getElementById("run-scanner").addEventListener("click", async () => {
       ...r.confirmations.map((c) => `${c.confirmed ? "✓" : "✗"} ${c.name.padEnd(11)} ${c.detail}`),
     ];
     out.innerHTML = lines.map((l) => escapeHtml(l)).join("\n");
+  } catch (err) {
+    out.textContent = "Error: " + err.message;
+  }
+});
+
+// ---- analyze: one symbol in, one detailed invest/avoid report out -----------
+
+function renderHorizonCard(title, plan) {
+  return `
+    <div class="horizon-card">
+      <h4>${escapeHtml(title)} <span class="direction-tag ${plan.direction}">${plan.direction.toUpperCase()}</span></h4>
+      <div class="holding-period">${escapeHtml(plan.holding_period)}</div>
+      <div class="plan-grid">
+        <div><div class="plan-label">Entry</div><div class="plan-value">${fmtPlain(plan.entry)}</div></div>
+        <div><div class="plan-label">Stop</div><div class="plan-value">${fmtPlain(plan.stop)}</div></div>
+        <div><div class="plan-label">Take profit 1</div><div class="plan-value">${fmtPlain(plan.take_profit_1)}</div></div>
+        <div><div class="plan-label">Take profit 2</div><div class="plan-value">${fmtPlain(plan.take_profit_2)}</div></div>
+        <div><div class="plan-label">Risk / unit</div><div class="plan-value">${fmtPlain(plan.risk_per_unit)}</div></div>
+        <div><div class="plan-label">R:R to TP1</div><div class="plan-value">${plan.risk_reward_ratio.toFixed(2)}</div></div>
+      </div>
+      ${plan.notes.length ? `<div class="plan-notes">${plan.notes.map((n) => escapeHtml(n)).join("<br>")}</div>` : ""}
+    </div>`;
+}
+
+function renderAnalysis(r) {
+  const out = document.getElementById("analyze-output");
+  const research = r.research;
+  out.innerHTML = `
+    <span class="verdict-pill verdict-${r.verdict}">${r.verdict}</span><span class="confidence-tag">${r.confidence} confidence</span>
+    <p style="margin:10px 0 4px">${escapeHtml(r.summary)}</p>
+
+    <div class="research-grid">
+      <div class="research-stat"><div class="stat-label">Last close</div><div class="stat-value">${fmtPlain(r.last_close)}</div></div>
+      <div class="research-stat"><div class="stat-label">200-day trend</div><div class="stat-value">${escapeHtml(research.trend_regime)}</div></div>
+      <div class="research-stat"><div class="stat-label">50-EMA</div><div class="stat-value">${fmtPlain(research.short_term_ema)}</div></div>
+      <div class="research-stat"><div class="stat-label">200-EMA</div><div class="stat-value">${fmtPlain(research.long_term_ema)}</div></div>
+      <div class="research-stat"><div class="stat-label">Momentum (21d)</div><div class="stat-value ${research.momentum_pct >= 0 ? "pos" : "neg"}">${fmtPct(research.momentum_pct)}</div></div>
+      <div class="research-stat"><div class="stat-label">Ann. volatility</div><div class="stat-value">${research.volatility_annualized_pct.toFixed(1)}%</div></div>
+      <div class="research-stat"><div class="stat-label">1y high</div><div class="stat-value">${fmtPlain(research.year_high)} <span class="muted">(${fmtPct(research.distance_from_year_high_pct)})</span></div></div>
+      <div class="research-stat"><div class="stat-label">1y low</div><div class="stat-value">${fmtPlain(research.year_low)} <span class="muted">(${fmtPct(research.distance_from_year_low_pct)})</span></div></div>
+    </div>
+
+    <div class="debate-columns">
+      <div class="debate-col bull"><h4>Bull case</h4><ul>${r.debate.bull_points.map((p) => `<li>${escapeHtml(p)}</li>`).join("") || "<li>No bullish signals confirmed.</li>"}</ul></div>
+      <div class="debate-col bear"><h4>Bear case</h4><ul>${r.debate.bear_points.map((p) => `<li>${escapeHtml(p)}</li>`).join("") || "<li>No bearish signals confirmed.</li>"}</ul></div>
+    </div>
+
+    <div class="horizon-cards">
+      ${renderHorizonCard("Day trade", r.day_trade)}
+      ${renderHorizonCard("Long-term hold", r.long_term)}
+    </div>
+
+    <div style="margin-top:16px">
+      <span class="verdict-pill verdict-${r.risk.passed ? "APPROVED" : "REJECTED"}">${r.risk.status}</span>
+      ${r.risk.checks.map((c) => `<div class="check-row"><span class="${c.passed ? "check-pass" : "check-fail"}">${c.passed ? "✓" : "✗"}</span> <strong>${c.name}</strong> — ${escapeHtml(c.detail)}</div>`).join("")}
+    </div>`;
+}
+
+document.getElementById("analyze-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = document.getElementById("analyze-symbol");
+  const symbol = input.value.trim().toUpperCase();
+  const out = document.getElementById("analyze-output");
+  if (!symbol) { out.textContent = "Type a symbol first."; return; }
+  out.innerHTML = loadingHtml(`Analyzing ${escapeHtml(symbol)}…`);
+  try {
+    const r = await getJSON(`/api/analyze/${symbol}`);
+    renderAnalysis(r);
   } catch (err) {
     out.textContent = "Error: " + err.message;
   }

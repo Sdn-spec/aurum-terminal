@@ -319,10 +319,57 @@ th.c-num { text-align: right; }
   animation: fadeIn 0.3s var(--ease-out) both;
 }
 .verdict-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.verdict-APPROVED { background: var(--positive-soft); color: var(--positive-strong); box-shadow: 0 0 16px var(--positive-glow); animation: pillGlow 2.2s ease-in-out infinite; }
-.verdict-WATCHLIST { background: var(--accent-wash); color: var(--accent-strong); }
-.verdict-REJECTED { background: var(--negative-soft); color: var(--negative-strong); }
+.verdict-APPROVED, .verdict-INVEST { background: var(--positive-soft); color: var(--positive-strong); box-shadow: 0 0 16px var(--positive-glow); animation: pillGlow 2.2s ease-in-out infinite; }
+.verdict-WATCHLIST, .verdict-WATCH { background: var(--accent-wash); color: var(--accent-strong); }
+.verdict-REJECTED, .verdict-AVOID { background: var(--negative-soft); color: var(--negative-strong); }
 @keyframes pillGlow { 0%, 100% { box-shadow: 0 0 12px var(--positive-glow); } 50% { box-shadow: 0 0 22px var(--positive-glow); } }
+
+.confidence-tag {
+  display: inline-flex; align-items: center; margin-left: 8px; padding: 4px 10px; border-radius: 999px;
+  font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border);
+}
+
+/* ---- analyze tab: symbol input, bull/bear debate, horizon plan cards ---- */
+.analyze-form { display: flex; gap: 8px; }
+.analyze-form input {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);
+  padding: 9px 12px; font-size: 0.86rem; font-family: var(--font-mono); width: 220px;
+  text-transform: uppercase; transition: border-color 0.2s, box-shadow 0.2s;
+}
+.analyze-form input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); outline: none; }
+
+.research-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;
+  margin: 4px 0 18px; font-family: var(--font-mono);
+}
+.research-stat { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.research-stat .stat-label { font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+.research-stat .stat-value { font-size: 1.05rem; font-weight: 700; margin-top: 3px; color: var(--text-primary); }
+
+.debate-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 6px 0 18px; }
+@media (max-width: 720px) { .debate-columns { grid-template-columns: 1fr; } }
+.debate-col { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.debate-col h4 { margin: 0 0 8px; font-family: var(--font-display); font-size: 0.86rem; }
+.debate-col.bull h4 { color: var(--positive-strong); }
+.debate-col.bear h4 { color: var(--negative-strong); }
+.debate-col ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }
+.debate-col li { font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.5; padding-left: 16px; position: relative; color: var(--text-secondary); }
+.debate-col.bull li::before { content: "▲"; position: absolute; left: 0; color: var(--positive); font-size: 0.62rem; top: 4px; }
+.debate-col.bear li::before { content: "▼"; position: absolute; left: 0; color: var(--negative); font-size: 0.62rem; top: 4px; }
+
+.horizon-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 6px 0; }
+@media (max-width: 720px) { .horizon-cards { grid-template-columns: 1fr; } }
+.horizon-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.horizon-card h4 { margin: 0 0 2px; font-family: var(--font-display); font-size: 0.92rem; }
+.horizon-card .holding-period { font-size: 0.72rem; color: var(--text-muted); margin-bottom: 10px; }
+.plan-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; font-family: var(--font-mono); font-size: 0.82rem; }
+.plan-grid .plan-label { color: var(--text-muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.plan-grid .plan-value { color: var(--text-primary); font-weight: 600; }
+.horizon-card .plan-notes { margin-top: 10px; font-size: 0.76rem; color: var(--text-secondary); font-family: var(--font-mono); }
+.direction-tag { font-weight: 700; letter-spacing: 0.03em; }
+.direction-tag.long { color: var(--positive); }
+.direction-tag.short { color: var(--negative); }
 
 .check-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; }
 .check-pass { color: var(--positive); }

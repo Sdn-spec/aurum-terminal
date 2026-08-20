@@ -175,6 +175,29 @@ class TestWebServer(unittest.TestCase):
         self.assertGreater(len(body["strategy_equity_curve"]), 0)
         self.assertGreater(len(body["buy_hold_equity_curve"]), 0)
 
+    def test_analyze_endpoint_returns_full_report(self):
+        with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history):
+            res = self.client.get("/api/analyze/GOLD")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["symbol"], "GOLD")
+        self.assertIn(body["verdict"], ["INVEST", "WATCH", "AVOID"])
+        self.assertIn(body["confidence"], ["High", "Medium", "Low"])
+        self.assertIn("status", body["risk"])  # @property gap, same fix as the decision memo
+        for horizon in ("day_trade", "long_term"):
+            plan = body[horizon]
+            self.assertIn(plan["direction"], ["long", "short"])
+            self.assertIn("take_profit_1", plan)
+            self.assertIn("take_profit_2", plan)
+        self.assertGreater(len(body["debate"]["bull_points"]) + len(body["debate"]["bear_points"]), 0)
+        self.assertIn("trend_regime", body["research"])
+
+    def test_analyze_endpoint_works_for_a_raw_ticker_not_in_the_watchlist(self):
+        with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history):
+            res = self.client.get("/api/analyze/AAPL")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["symbol"], "AAPL")
+
     def test_forecast_baseline_endpoint(self):
         with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history):
             res = self.client.get("/api/forecast/baseline/GOLD?horizon=5")

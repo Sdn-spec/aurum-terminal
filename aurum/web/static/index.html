@@ -45,6 +45,7 @@
     <main id="main-pane">
       <nav class="tabs" id="tabs">
         <button data-tab="fund" class="active">Fund</button>
+        <button data-tab="analyze">Analyze</button>
         <button data-tab="chart">Chart</button>
         <button data-tab="scanner">Scanner</button>
         <button data-tab="decision">Decision</button>
@@ -69,6 +70,18 @@
             <tbody id="fund-body"></tbody>
           </table>
         </div>
+      </section>
+
+      <section class="tab-panel card" id="panel-analyze">
+        <div class="card-head">
+          <h2>Analyze</h2>
+          <form id="analyze-form" class="analyze-form">
+            <input type="text" id="analyze-symbol" placeholder="Symbol — GOLD, AAPL, BTC…" autocomplete="off" autocapitalize="characters" spellcheck="false">
+            <button type="submit">Analyze</button>
+          </form>
+        </div>
+        <p class="status-line">Type any symbol and get one report: research, a bull/bear case, a risk check, and trade plans for both day trading and a long-term hold — ending in one verdict. This never places a trade; you still make the call.</p>
+        <div id="analyze-output" class="panel-body">Type a symbol above and press Analyze.</div>
       </section>
 
       <section class="tab-panel card" id="panel-chart">
