@@ -529,6 +529,47 @@ function renderHorizonCard(title, plan) {
     </div>`;
 }
 
+function macroDeltaArrow(series) {
+  if (series.previous_value === null || series.previous_value === undefined) return "";
+  if (series.latest_value > series.previous_value) return ` <span class="pos">▲</span>`;
+  if (series.latest_value < series.previous_value) return ` <span class="neg">▼</span>`;
+  return "";
+}
+
+function renderMacroSection(macro) {
+  if (!macro || !macro.length) return "";
+  return `
+    <h4 class="report-section-title">Macro backdrop <span class="muted" style="font-weight:400">— via FRED, not symbol-specific</span></h4>
+    <div class="research-grid">
+      ${macro
+        .map(
+          (s) =>
+            `<div class="research-stat"><div class="stat-label">${escapeHtml(s.label)}</div>` +
+            `<div class="stat-value">${s.latest_value.toFixed(2)}${macroDeltaArrow(s)}</div>` +
+            `<div class="muted" style="font-size:0.64rem;margin-top:3px">as of ${escapeHtml(s.latest_date)}</div></div>`
+        )
+        .join("")}
+    </div>`;
+}
+
+function renderNewsSection(news, earnings) {
+  if ((!news || !news.length) && !earnings) return "";
+  const earningsHtml = earnings
+    ? `<div class="news-earnings"><strong>Next earnings:</strong> ${escapeHtml(earnings.date)}` +
+      (earnings.eps_estimate !== null && earnings.eps_estimate !== undefined ? ` · EPS estimate ${earnings.eps_estimate}` : "") +
+      `</div>`
+    : "";
+  const newsHtml =
+    news && news.length
+      ? `<ul class="news-list">${news
+          .map((n) => `<li><a href="${escapeHtml(n.url)}" target="_blank" rel="noopener">${escapeHtml(n.headline)}</a> <span class="muted">— ${escapeHtml(n.source)}</span></li>`)
+          .join("")}</ul>`
+      : "";
+  return `
+    <h4 class="report-section-title">News &amp; earnings <span class="muted" style="font-weight:400">— via Finnhub, stock tickers only</span></h4>
+    ${earningsHtml}${newsHtml}`;
+}
+
 function renderAnalysis(r) {
   const out = document.getElementById("analyze-output");
   const research = r.research;
@@ -546,6 +587,9 @@ function renderAnalysis(r) {
       <div class="research-stat"><div class="stat-label">1y high</div><div class="stat-value">${fmtPlain(research.year_high)} <span class="muted">(${fmtPct(research.distance_from_year_high_pct)})</span></div></div>
       <div class="research-stat"><div class="stat-label">1y low</div><div class="stat-value">${fmtPlain(research.year_low)} <span class="muted">(${fmtPct(research.distance_from_year_low_pct)})</span></div></div>
     </div>
+
+    ${renderMacroSection(r.macro)}
+    ${renderNewsSection(r.news, r.earnings)}
 
     <div class="debate-columns">
       <div class="debate-col bull"><h4>Bull case</h4><ul>${r.debate.bull_points.map((p) => `<li>${escapeHtml(p)}</li>`).join("") || "<li>No bullish signals confirmed.</li>"}</ul></div>

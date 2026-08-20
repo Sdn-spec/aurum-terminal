@@ -8,7 +8,7 @@ existing decision memo already uses for the day-trade-only case.
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 from ..datafeed.yahoo import HistoryBar
@@ -84,6 +84,15 @@ class AnalysisReport:
     confidence: str  # "High" | "Medium" | "Low"
     score: int
     summary: str
+    # Optional external context, pre-fetched by the caller (see aurum.web.server)
+    # and passed straight through — analyze_symbol() itself stays pure/fast and
+    # doesn't make network calls. Informational only: macro/news/earnings never
+    # factor into the score above, since how a given instrument actually reacts
+    # to a given macro move is instrument-specific and not something to encode
+    # as a fixed rule here.
+    macro: List[dict] = field(default_factory=list)
+    news: List[dict] = field(default_factory=list)
+    earnings: Optional[dict] = None
 
 
 def _ema_series(values: List[float], period: int) -> List[float]:
@@ -243,10 +252,15 @@ def analyze_symbol(
     peak_equity: float,
     realized_pnl_today: float = 0.0,
     limits: Optional[RiskLimits] = None,
+    macro: Optional[List[dict]] = None,
+    news: Optional[List[dict]] = None,
+    earnings: Optional[dict] = None,
 ) -> AnalysisReport:
     """The full one-input pipeline: scan -> research -> debate -> day-trade
     and long-term plans -> risk gate -> scored verdict. `bars` must be daily
-    history with enough bars for a 200-day EMA (see MIN_BARS_FOR_ANALYSIS)."""
+    history with enough bars for a 200-day EMA (see MIN_BARS_FOR_ANALYSIS).
+    `macro`/`news`/`earnings` are optional, already-fetched external context
+    (see aurum.web.server) — this function makes no network calls itself."""
     if len(bars) < MIN_BARS_FOR_ANALYSIS:
         raise ValueError(f"need at least {MIN_BARS_FOR_ANALYSIS} daily bars for a full analysis, got {len(bars)}")
 
@@ -343,4 +357,7 @@ def analyze_symbol(
         confidence=confidence,
         score=score,
         summary=summary,
+        macro=macro or [],
+        news=news or [],
+        earnings=earnings,
     )

@@ -1,6 +1,7 @@
 """API-level tests for the FastAPI backend. Network calls are mocked —
 these test the web layer's wiring and error handling, not Yahoo's uptime."""
 
+import json
 import os
 import sys
 import tempfile
@@ -13,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi.testclient import TestClient
 
-from aurum.datafeed import cache, provider, yahoo
+from aurum.datafeed import cache, finnhub, fred, provider, yahoo
 from aurum.web import server
 
 
@@ -58,12 +59,22 @@ class TestWebServer(unittest.TestCase):
         self._env_patch = patch.dict("os.environ", {}, clear=False)
         self._env_patch.start()
         os.environ.pop("TWELVEDATA_API_KEY", None)
+        os.environ.pop("FRED_API_KEY", None)
+        os.environ.pop("FINNHUB_API_KEY", None)
+        # server._macro_cache/_news_cache are process-global — reset them per test
+        # so one test's fake FRED/Finnhub data can't leak into the next.
+        self._macro_cache_patch = patch.object(server, "_macro_cache", {"data": None, "at": 0.0})
+        self._macro_cache_patch.start()
+        self._news_cache_patch = patch.object(server, "_news_cache", {})
+        self._news_cache_patch.start()
 
     def tearDown(self):
         self._state_patch.stop()
         self._cache_patch.stop()
         self._config_patch.stop()
         self._env_patch.stop()
+        self._macro_cache_patch.stop()
+        self._news_cache_patch.stop()
         self._tmpdir.cleanup()
 
     def test_index_serves_html(self):
@@ -197,6 +208,44 @@ class TestWebServer(unittest.TestCase):
             res = self.client.get("/api/analyze/AAPL")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["symbol"], "AAPL")
+
+    def test_analyze_endpoint_has_empty_macro_news_earnings_when_no_keys_configured(self):
+        with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history):
+            res = self.client.get("/api/analyze/GOLD")
+        body = res.json()
+        self.assertEqual(body["macro"], [])
+        self.assertEqual(body["news"], [])
+        self.assertIsNone(body["earnings"])
+
+    def test_analyze_endpoint_folds_in_macro_and_news_when_keys_are_configured(self):
+        provider.CONFIG_PATH.write_text(json.dumps({"fred_api_key": "fake-fred", "finnhub_api_key": "fake-finnhub"}))
+        fake_macro = [fred.MacroSeries(key="fed_funds_rate", series_id="DFF", label="Fed funds rate", latest_date="2026-08-01", latest_value=4.33, previous_value=4.58)]
+        fake_news = [finnhub.NewsItem(headline="Gold rallies", source="Reuters", url="https://example.com", published=1700000000)]
+        fake_earnings = finnhub.EarningsEvent(date="2026-11-05", eps_estimate=1.42, eps_actual=None)
+        with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history), \
+             patch("aurum.datafeed.fred.get_macro_snapshot", return_value=fake_macro), \
+             patch("aurum.datafeed.finnhub.get_company_news", return_value=fake_news), \
+             patch("aurum.datafeed.finnhub.get_next_earnings", return_value=fake_earnings):
+            res = self.client.get("/api/analyze/GOLD")
+        body = res.json()
+        self.assertEqual(body["macro"][0]["key"], "fed_funds_rate")
+        self.assertEqual(body["news"][0]["headline"], "Gold rallies")
+        self.assertEqual(body["earnings"]["date"], "2026-11-05")
+
+    def test_macro_endpoint_returns_empty_list_when_no_key_configured(self):
+        res = self.client.get("/api/macro")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json(), [])
+
+    def test_macro_endpoint_returns_snapshot_when_key_configured(self):
+        provider.CONFIG_PATH.write_text(json.dumps({"fred_api_key": "fake-fred"}))
+        fake_macro = [fred.MacroSeries(key="unemployment", series_id="UNRATE", label="Unemployment rate", latest_date="2026-08-01", latest_value=4.1, previous_value=4.0)]
+        with patch("aurum.datafeed.fred.get_macro_snapshot", return_value=fake_macro):
+            res = self.client.get("/api/macro")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body[0]["key"], "unemployment")
+        self.assertEqual(body[0]["latest_value"], 4.1)
 
     def test_forecast_baseline_endpoint(self):
         with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history):

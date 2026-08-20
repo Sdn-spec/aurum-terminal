@@ -63,6 +63,29 @@ class TestAnalyzeSymbol(unittest.TestCase):
         self.assertFalse(report.risk.passed)
         self.assertEqual(report.verdict, "AVOID")
 
+    def test_macro_news_earnings_default_to_empty_when_not_supplied(self):
+        bars = _trending_bars(step=0.3)
+        report = analyzer.analyze_symbol("TEST", bars, equity=3000.0, peak_equity=3000.0)
+        self.assertEqual(report.macro, [])
+        self.assertEqual(report.news, [])
+        self.assertIsNone(report.earnings)
+
+    def test_macro_news_earnings_pass_through_unchanged_when_supplied(self):
+        bars = _trending_bars(step=0.3)
+        macro = [{"key": "fed_funds_rate", "latest_value": 4.33}]
+        news = [{"headline": "Something happened"}]
+        earnings = {"date": "2026-11-05", "eps_estimate": 1.42}
+        report = analyzer.analyze_symbol(
+            "TEST", bars, equity=3000.0, peak_equity=3000.0, macro=macro, news=news, earnings=earnings
+        )
+        self.assertEqual(report.macro, macro)
+        self.assertEqual(report.news, news)
+        self.assertEqual(report.earnings, earnings)
+        # informational only -- passing macro/news/earnings must not change the score
+        baseline = analyzer.analyze_symbol("TEST", bars, equity=3000.0, peak_equity=3000.0)
+        self.assertEqual(report.score, baseline.score)
+        self.assertEqual(report.verdict, baseline.verdict)
+
     def test_take_profit_2_is_further_than_take_profit_1_in_plan_direction(self):
         bars = _trending_bars(step=0.3)
         report = analyzer.analyze_symbol("TEST", bars, equity=3000.0, peak_equity=3000.0)

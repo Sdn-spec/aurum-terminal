@@ -120,6 +120,32 @@ already in place:
    recorded with dates in `aurum/datafeed/universe.py`'s `TWELVEDATA_ALIASES`
    — if Twelve Data's free tier changes, that's where to update it.
 
+### Optional research providers (macro, news, earnings)
+
+The **Analyze** tab's report folds in macro context and, for real stock
+tickers, news and the next earnings date — both entirely optional, and the
+report works fine without either configured (those sections just don't
+render). Same `data/config.json` file, same env-var-first resolution order:
+
+```json
+{
+  "twelvedata_api_key": "...",
+  "fred_api_key": "...",
+  "finnhub_api_key": "..."
+}
+```
+
+- **FRED** (fed funds rate, CPI, unemployment, 10-year Treasury yield) —
+  free, no application review, generous limits. Get a key at
+  <https://fredaccount.stlouisfed.org/apikeys>, or set `FRED_API_KEY`.
+  Not symbol-specific — same four series for every report, cached 6 hours.
+- **Finnhub** (company news, next earnings date) — free tier, 60
+  calls/minute. Get a key at <https://finnhub.io/register>, or set
+  `FINNHUB_API_KEY`. Only meaningful for real stock tickers (AAPL, MSFT,
+  ...) — commodity/forex/index names like GOLD or BTC aren't
+  Finnhub-recognized symbols, so these sections just come back empty for
+  them, not an error.
+
 Other providers considered and why they lost: **Google Finance** has no
 public API anymore (the old one was deprecated years ago). **Stooq** is
 blocked by an actual JavaScript proof-of-work challenge, not a rate limit —

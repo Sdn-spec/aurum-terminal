@@ -10,6 +10,7 @@ Then open http://127.0.0.1:8000 in a browser.
 import asyncio
 import dataclasses
 import json
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -18,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..backtest.adapter import run_strategy
-from ..datafeed import cache, universe, yahoo
+from ..datafeed import cache, finnhub, fred, universe, yahoo
 from ..decision import memo as decision_memo
 from ..forecast import baseline
 from ..optimize import engine as optimize_engine
@@ -27,6 +28,49 @@ from ..signals import scanner
 
 STATE_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "state.json"
 DEFAULT_STATE = {"equity": 3000.0, "peak_equity": 3000.0, "realized_pnl_today": 0.0}
+
+# Process-local caches for the research providers: macro barely moves within a
+# day and news/earnings don't need to be refetched on every Analyze click, so
+# these avoid hammering FRED/Finnhub without needing a full disk-cache layer
+# like aurum.datafeed.cache uses for price data.
+_MACRO_CACHE_TTL_SECONDS = 6 * 3600
+_NEWS_CACHE_TTL_SECONDS = 3600
+_macro_cache = {"data": None, "at": 0.0}
+_news_cache: dict = {}  # symbol -> ((news, earnings), fetched_at)
+
+
+def _get_macro_snapshot_cached() -> Optional[list]:
+    api_key = fred.resolve_api_key()
+    if not api_key:
+        return None
+    now = time.time()
+    if _macro_cache["data"] is not None and now - _macro_cache["at"] < _MACRO_CACHE_TTL_SECONDS:
+        return _macro_cache["data"]
+    try:
+        snapshot = fred.get_macro_snapshot(api_key)
+    except yahoo.DataFeedError:
+        return _macro_cache["data"]  # serve stale (possibly None) rather than fail the whole report
+    _macro_cache["data"] = [dataclasses.asdict(s) for s in snapshot]
+    _macro_cache["at"] = now
+    return _macro_cache["data"]
+
+
+def _get_news_and_earnings_cached(symbol: str):
+    api_key = finnhub.resolve_api_key()
+    if not api_key:
+        return [], None
+    now = time.time()
+    cached = _news_cache.get(symbol)
+    if cached and now - cached[1] < _NEWS_CACHE_TTL_SECONDS:
+        return cached[0]
+    try:
+        news_items = finnhub.get_company_news(symbol, api_key)
+        earnings_event = finnhub.get_next_earnings(symbol, api_key)
+    except yahoo.DataFeedError:
+        return cached[0] if cached else ([], None)
+    result = ([dataclasses.asdict(n) for n in news_items], dataclasses.asdict(earnings_event) if earnings_event else None)
+    _news_cache[symbol] = (result, now)
+    return result
 
 app = FastAPI(title="Aurum")
 
@@ -79,6 +123,9 @@ def _analysis_report_dict(report) -> dict:
         "confidence": report.confidence,
         "score": report.score,
         "summary": report.summary,
+        "macro": report.macro,
+        "news": report.news,
+        "earnings": report.earnings,
     }
 
 
@@ -282,21 +329,44 @@ async def get_fund():
 # ---- one-input analysis report -------------------------------------------------
 
 
+@app.get("/api/macro")
+async def get_macro():
+    """The standalone macro snapshot (fed funds rate, CPI, unemployment,
+    10-year yield) — not symbol-specific, cached for a few hours since none
+    of these move intraday. Returns an empty list rather than 502 when no
+    FRED key is configured, since macro context is optional everywhere it's
+    used, not a hard dependency."""
+    snapshot = await asyncio.to_thread(_get_macro_snapshot_cached)
+    return snapshot or []
+
+
 @app.get("/api/analyze/{name}")
 async def get_analysis(name: str):
     """The "type a symbol, get a verdict" endpoint: research + bull/bear
     debate + risk check + day-trade and long-term plans, in one call. Works
     for anything cache.get_history can fetch — the default watchlist names
-    or a raw ticker like AAPL — not just the commodities in DEFAULT_WATCHLIST."""
+    or a raw ticker like AAPL — not just the commodities in DEFAULT_WATCHLIST.
+    Folds in macro (FRED) and news/earnings (Finnhub) context when a key is
+    configured for either — both are optional and never block the report."""
     try:
         bars = await asyncio.to_thread(cache.get_history, name, "10y", "1d")
     except yahoo.DataFeedError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
     state = _load_state()
+    macro = await asyncio.to_thread(_get_macro_snapshot_cached)
+    news, earnings = await asyncio.to_thread(_get_news_and_earnings_cached, name)
     try:
         result = await asyncio.to_thread(
-            analyzer.analyze_symbol, name, bars, state["equity"], state["peak_equity"], state["realized_pnl_today"]
+            analyzer.analyze_symbol,
+            name,
+            bars,
+            state["equity"],
+            state["peak_equity"],
+            state["realized_pnl_today"],
+            macro=macro,
+            news=news,
+            earnings=earnings,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))

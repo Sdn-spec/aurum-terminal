@@ -356,6 +356,15 @@ th.c-num { text-align: right; }
 .research-stat .stat-label { font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
 .research-stat .stat-value { font-size: 1.05rem; font-weight: 700; margin-top: 3px; color: var(--text-primary); }
 
+.report-section-title {
+  font-family: var(--font-display); font-size: 0.86rem; font-weight: 620; margin: 4px 0 10px; color: var(--text-primary);
+}
+.news-earnings { font-family: var(--font-mono); font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 10px; }
+.news-list { margin: 0 0 18px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.news-list li { font-family: var(--font-mono); font-size: 0.82rem; }
+.news-list a { color: var(--accent-strong); text-decoration: none; }
+.news-list a:hover { text-decoration: underline; }
+
 .debate-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 6px 0 18px; }
 @media (max-width: 720px) { .debate-columns { grid-template-columns: 1fr; } }
 .debate-col { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
