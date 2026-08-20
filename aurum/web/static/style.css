@@ -175,9 +175,24 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .account-form button:active, .card-head button:active { transform: translateY(0); }
 
 /* ---- layout ---- */
-#body { display: flex; gap: 18px; padding: 20px 28px 44px; align-items: flex-start; }
-#watchlist-pane { width: 380px; flex: none; animation: fadeInLeft 0.6s 0.05s var(--ease-out) both; }
+#body { display: flex; gap: 18px; padding: 20px 28px 44px; align-items: flex-start; position: relative; }
+#watchlist-pane {
+  width: 380px; flex: none; overflow: hidden;
+  animation: fadeInLeft 0.6s 0.05s var(--ease-out) both;
+  transition: width 0.32s var(--ease-out), opacity 0.24s var(--ease-out), margin 0.32s var(--ease-out), padding 0.32s var(--ease-out), border-width 0.32s;
+}
+#watchlist-pane.collapsed {
+  width: 0; opacity: 0; padding: 0; border-width: 0; margin-right: -18px; pointer-events: none;
+}
 #main-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; animation: fadeInUp 0.6s 0.1s var(--ease-out) both; }
+#watchlist-toggle {
+  flex: none; width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-secondary);
+  transition: background 0.2s, color 0.2s, transform 0.28s var(--ease-out);
+}
+#watchlist-toggle:hover { color: var(--accent-strong); border-color: var(--border-strong); }
+#watchlist-toggle svg { width: 16px; height: 16px; transition: transform 0.28s var(--ease-out); }
+#watchlist-toggle.collapsed svg { transform: rotate(180deg); }
 
 @keyframes fadeInDown { from { opacity: 0; transform: translateY(-14px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes fadeInUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
@@ -197,6 +212,18 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
 .card-head h2 { font-family: var(--font-display); font-weight: 620; font-size: 1.08rem; margin: 0; }
+.card-head-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ---- segmented control (timeframe / chart type) ---- */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface-2); }
+.seg button {
+  background: none; border: none; color: var(--text-secondary); padding: 6px 13px; font-size: 0.78rem;
+  font-weight: 700; font-family: var(--font-mono); letter-spacing: 0.01em; transition: background 0.18s, color 0.18s;
+  border-right: 1px solid var(--border);
+}
+.seg button:last-child { border-right: none; }
+.seg button:hover { color: var(--text-primary); }
+.seg button.active { background: linear-gradient(135deg, var(--accent-strong), var(--accent)); color: var(--accent-ink); }
 
 /* ---- tabs ---- */
 .tabs { position: relative; display: flex; gap: 2px; border-bottom: 1px solid var(--border); padding-bottom: 0; }
@@ -271,6 +298,14 @@ th.c-num { text-align: right; }
 .chart-area { opacity: 0; animation: fadeIn 0.8s 0.5s var(--ease-out) forwards; }
 .chart-endpoint { opacity: 0; animation: popIn 0.4s 1.0s var(--ease-out) forwards; transform-origin: center; }
 @keyframes popIn { from { opacity: 0; transform: scale(0); } to { opacity: 1; transform: scale(1); } }
+
+.candle-wick { stroke-width: 1.2; }
+.candle-body { stroke: none; }
+.candle-up { fill: var(--positive); }
+.candle-down { fill: var(--negative); }
+.candle-wick.up { stroke: var(--positive); }
+.candle-wick.down { stroke: var(--negative); }
+.candle-group { opacity: 0; animation: fadeIn 0.4s var(--ease-out) forwards; transform-origin: bottom; }
 
 /* ---- panel bodies / verdicts / gauges ---- */
 .panel-body { font-family: var(--font-mono); font-size: 0.86rem; white-space: pre-wrap; color: var(--text-secondary); line-height: 1.65; }

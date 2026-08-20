@@ -93,6 +93,23 @@ document.getElementById("tabs").addEventListener("click", (e) => {
 });
 window.addEventListener("resize", () => positionTabUnderline(document.querySelector("#tabs button.active")));
 
+// ---- watchlist collapse (persisted) ------------------------------------------
+
+function setWatchlistCollapsed(collapsed) {
+  document.getElementById("watchlist-pane").classList.toggle("collapsed", collapsed);
+  document.getElementById("watchlist-toggle").classList.toggle("collapsed", collapsed);
+  try { localStorage.setItem("aurum-watchlist-collapsed", collapsed ? "1" : "0"); } catch (e) {}
+}
+document.getElementById("watchlist-toggle").addEventListener("click", () => {
+  const collapsed = !document.getElementById("watchlist-pane").classList.contains("collapsed");
+  setWatchlistCollapsed(collapsed);
+});
+(function restoreWatchlistCollapsed() {
+  let saved = null;
+  try { saved = localStorage.getItem("aurum-watchlist-collapsed"); } catch (e) {}
+  if (saved === "1") setWatchlistCollapsed(true);
+})();
+
 // ---- account state ------------------------------------------------------
 
 async function loadState() {
@@ -234,19 +251,107 @@ function renderLineChart(svgEl, series, { showLegend = false } = {}) {
   });
 }
 
+// ---- candlestick renderer ---------------------------------------------------
+
+function renderCandlestickChart(svgEl, bars) {
+  const W = 640, H = 220, padL = 56, padR = 14, padT = 16, padB = 16;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  if (!bars.length) { svgEl.innerHTML = ""; return; }
+
+  let minY = Math.min(...bars.map((b) => b.low)), maxY = Math.max(...bars.map((b) => b.high));
+  const rangeY0 = maxY - minY || 1;
+  minY -= rangeY0 * 0.06; maxY += rangeY0 * 0.06;
+  const rangeY = maxY - minY;
+
+  const n = bars.length;
+  const xAt = (i) => padL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const yAt = (y) => padT + plotH - ((y - minY) / rangeY) * plotH;
+  const slotW = plotW / n;
+  const bodyW = Math.max(1.5, Math.min(9, slotW * 0.62));
+
+  const gridSteps = [minY + rangeY * 0.15, minY + rangeY * 0.5, minY + rangeY * 0.85];
+  let svg = gridSteps
+    .map((v) => {
+      const y = yAt(v).toFixed(2);
+      return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="var(--border)" stroke-width="1" />` +
+        `<text x="${padL - 8}" y="${y}" text-anchor="end" dominant-baseline="middle" font-family="var(--font-mono)" font-size="10" fill="var(--text-muted)">${fmtPlain(v)}</text>`;
+    })
+    .join("");
+
+  bars.forEach((b, i) => {
+    const up = b.close >= b.open;
+    const cls = up ? "up" : "down";
+    const x = xAt(i);
+    const yHigh = yAt(b.high), yLow = yAt(b.low);
+    const yOpen = yAt(b.open), yClose = yAt(b.close);
+    const bodyTop = Math.min(yOpen, yClose), bodyH = Math.max(1, Math.abs(yClose - yOpen));
+    const delay = Math.min(i * 3, 500);
+    svg += `<g class="candle-group" style="animation-delay:${delay}ms">` +
+      `<line class="candle-wick ${cls}" x1="${x.toFixed(2)}" y1="${yHigh.toFixed(2)}" x2="${x.toFixed(2)}" y2="${yLow.toFixed(2)}" />` +
+      `<rect class="candle-body candle-${cls}" x="${(x - bodyW / 2).toFixed(2)}" y="${bodyTop.toFixed(2)}" width="${bodyW.toFixed(2)}" height="${bodyH.toFixed(2)}" rx="0.6" />` +
+      `</g>`;
+  });
+
+  svgEl.innerHTML = svg;
+}
+
+// ---- chart state + loading ---------------------------------------------------
+
+const TIMEFRAMES = {
+  "1m": { range: "7d", interval: "1m" },
+  "15m": { range: "60d", interval: "15m" },
+  "1d": { range: "10y", interval: "1d" },
+};
+const CHART_DISPLAY_BARS = 150;
+// Read the starting state from whichever button HTML marks active, rather than
+// hardcoding it separately — one source of truth, so the two can't desync.
+let chartTimeframe = document.querySelector("#chart-timeframe button.active")?.dataset.tf || "1d";
+let chartType = document.querySelector("#chart-type button.active")?.dataset.type || "line";
+let currentChartBars = [];
+let currentChartName = null;
+
+document.getElementById("chart-timeframe").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-tf]");
+  if (!btn) return;
+  document.querySelectorAll("#chart-timeframe button").forEach((b) => b.classList.toggle("active", b === btn));
+  chartTimeframe = btn.dataset.tf;
+  if (currentChartName) loadChart(currentChartName);
+});
+document.getElementById("chart-type").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-type]");
+  if (!btn) return;
+  document.querySelectorAll("#chart-type button").forEach((b) => b.classList.toggle("active", b === btn));
+  chartType = btn.dataset.type;
+  renderCurrentChart();
+});
+
+function renderCurrentChart() {
+  if (!currentChartBars.length) return;
+  const recent = currentChartBars.slice(-CHART_DISPLAY_BARS);
+  if (chartType === "candles") {
+    renderCandlestickChart(document.getElementById("chart-svg"), recent);
+  } else {
+    renderLineChart(document.getElementById("chart-svg"), [
+      { label: currentChartName, color: "var(--accent)", points: recent.map((b) => ({ x: b.timestamp, y: b.close })) },
+    ]);
+  }
+}
+
 async function loadChart(name) {
+  currentChartName = name;
   const summary = document.getElementById("chart-summary");
   summary.innerHTML = loadingHtml("Loading…");
   summary.classList.remove("error");
   try {
-    const bars = await getJSON(`/api/history/${name}?range=10y&interval=1d`);
-    const recent = bars.slice(-180);
-    renderLineChart(document.getElementById("chart-svg"), [
-      { label: name, color: "var(--accent)", points: recent.map((b) => ({ x: b.timestamp, y: b.close })) },
-    ]);
+    const { range, interval } = TIMEFRAMES[chartTimeframe];
+    const bars = await getJSON(`/api/history/${name}?range=${range}&interval=${interval}`);
+    currentChartBars = bars;
+    renderCurrentChart();
+    const recent = bars.slice(-CHART_DISPLAY_BARS);
     const change = recent.length > 1 ? ((recent[recent.length - 1].close - recent[0].close) / recent[0].close) * 100 : 0;
-    summary.textContent = `${bars.length} daily bars cached · last ${recent.length} shown · ${fmtPct(change)} over that window`;
+    summary.textContent = `${bars.length} ${chartTimeframe} bars cached · last ${recent.length} shown · ${fmtPct(change)} over that window`;
   } catch (err) {
+    currentChartBars = [];
     summary.textContent = `Could not load history: ${err.message}`;
     summary.classList.add("error");
   }

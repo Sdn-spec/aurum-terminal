@@ -27,6 +27,9 @@
   </header>
 
   <div id="body">
+    <button id="watchlist-toggle" type="button" aria-label="Toggle watchlist" title="Toggle watchlist">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+    </button>
     <aside id="watchlist-pane" class="card">
       <div class="card-head"><h2>Watchlist</h2><button id="refresh-quotes" type="button">Refresh</button></div>
       <div class="table-scroll">
@@ -68,7 +71,20 @@
       </section>
 
       <section class="tab-panel card" id="panel-chart">
-        <div class="card-head"><h2 id="chart-title">Chart — select a symbol</h2></div>
+        <div class="card-head">
+          <h2 id="chart-title">Chart — select a symbol</h2>
+          <div class="card-head-controls">
+            <div class="seg" id="chart-timeframe">
+              <button data-tf="1m">1m</button>
+              <button data-tf="15m">15m</button>
+              <button data-tf="1d" class="active">1d</button>
+            </div>
+            <div class="seg" id="chart-type">
+              <button data-type="line" class="active">Line</button>
+              <button data-type="candles">Candles</button>
+            </div>
+          </div>
+        </div>
         <div id="chart-wrap"><svg id="chart-svg" viewBox="0 0 640 220" preserveAspectRatio="xMidYMid meet"></svg></div>
         <p id="chart-summary" class="status-line"></p>
       </section>

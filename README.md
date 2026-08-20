@@ -62,6 +62,13 @@ renders each check as a radial gauge against its limit, and the Fund/
 Optimizer views render the suggested split as an animated donut plus
 per-row allocation bars. Everything respects `prefers-reduced-motion`.
 
+The Chart panel switches between **1m / 15m / 1d** (backed by `?range=` /
+`?interval=` the API already supported — a frontend-only change) and
+**Line / Candlestick** rendering; only the active symbol's history is
+fetched, so switching timeframe doesn't touch the rest of the watchlist.
+The watchlist sidebar collapses via the arrow button next to it (state
+persists in `localStorage`) when you want the chart full-width.
+
 ## If Yahoo is rate-limiting you (HTTP 429 / 502 errors)
 
 This happened repeatedly during development, and to a live user session too
