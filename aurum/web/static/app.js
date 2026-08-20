@@ -188,6 +188,15 @@ async function buildWatchlistRows() {
     )
     .join("");
   body.querySelectorAll("tr").forEach((row) => row.addEventListener("click", () => selectSymbol(row.dataset.name)));
+  populateAnalyzeSymbolSelect();
+}
+
+function populateAnalyzeSymbolSelect() {
+  const select = document.getElementById("analyze-symbol");
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = watchlistDefs.map((w) => `<option value="${w.name}">${w.name}</option>`).join("");
+  if (current && watchlistDefs.some((w) => w.name === current)) select.value = current;
 }
 
 async function refreshWatchlistQuotes() {
@@ -243,8 +252,8 @@ function selectSymbol(name) {
   document.querySelectorAll("#watchlist-body tr").forEach((r) => r.classList.toggle("selected", r.dataset.name === name));
   document.getElementById("chart-title").innerHTML = `${iconFor(name)} Chart — ${name}`;
   loadChart(name);
-  const analyzeInput = document.getElementById("analyze-symbol");
-  if (analyzeInput && !analyzeInput.value) analyzeInput.value = name;
+  const analyzeSelect = document.getElementById("analyze-symbol");
+  if (analyzeSelect) analyzeSelect.value = name;
 }
 
 // ---- chart (TradingView Lightweight Charts: candles, volume, EMA overlay,
@@ -609,10 +618,10 @@ function renderAnalysis(r) {
 
 document.getElementById("analyze-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const input = document.getElementById("analyze-symbol");
-  const symbol = input.value.trim().toUpperCase();
+  const select = document.getElementById("analyze-symbol");
+  const symbol = select.value;
   const out = document.getElementById("analyze-output");
-  if (!symbol) { out.textContent = "Type a symbol first."; return; }
+  if (!symbol) { out.textContent = "Pick a symbol first."; return; }
   out.innerHTML = loadingHtml(`Analyzing ${escapeHtml(symbol)}…`);
   try {
     const r = await getJSON(`/api/analyze/${symbol}`);

@@ -339,14 +339,13 @@ th.c-num { text-align: right; }
   background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border);
 }
 
-/* ---- analyze tab: symbol input, bull/bear debate, horizon plan cards ---- */
+/* ---- analyze tab: symbol picker, bull/bear debate, horizon plan cards ---- */
 .analyze-form { display: flex; gap: 8px; }
-.analyze-form input {
-  background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);
-  padding: 9px 12px; font-size: 0.86rem; font-family: var(--font-mono); width: 220px;
-  text-transform: uppercase; transition: border-color 0.2s, box-shadow 0.2s;
+.analyze-form select {
+  min-width: 160px; font-family: var(--font-mono); font-size: 0.86rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
-.analyze-form input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); outline: none; }
+.analyze-form select:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); outline: none; }
 
 .research-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;
