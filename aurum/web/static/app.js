@@ -165,12 +165,109 @@ async function buildWatchlistRows() {
   body.innerHTML = watchlistDefs
     .map(
       (w, i) =>
-        `<tr class="watch-row" data-name="${w.name}" style="animation-delay:${i * 45}ms"><td><div class="sym-cell">${iconFor(w.name)}<span>${w.name}</span></div></td><td>${w.ticker}</td>` +
-        `<td class="c-num" data-cell="last">—</td><td class="c-num" data-cell="high">—</td><td class="c-num" data-cell="low">—</td></tr>`
+        `<tr class="watch-row" data-name="${w.name}" style="animation-delay:${i * 45}ms"><td><div class="sym-cell">${iconFor(w.name)}<span class="sym-name">${w.name}</span></div></td><td>${w.ticker}</td>` +
+        `<td class="c-num" data-cell="last">—</td><td class="c-num" data-cell="high">—</td><td class="c-num" data-cell="low">—</td>` +
+        `<td class="watch-actions"><button type="button" class="row-edit-btn" title="Rename">✎</button><button type="button" class="row-delete-btn" title="Remove">✕</button></td></tr>`
     )
     .join("");
-  body.querySelectorAll("tr").forEach((row) => row.addEventListener("click", () => openSymbol(row.dataset.name)));
 }
+
+// A single delegated listener (rather than one per row) survives buildWatchlistRows()
+// rebuilding the whole tbody on every add/remove/rename — no re-attaching needed.
+document.getElementById("watchlist-body").addEventListener("click", (e) => {
+  const deleteBtn = e.target.closest(".row-delete-btn");
+  if (deleteBtn) {
+    e.stopPropagation();
+    deleteWatchlistSymbol(deleteBtn.closest("tr").dataset.name);
+    return;
+  }
+  const editBtn = e.target.closest(".row-edit-btn");
+  if (editBtn) {
+    e.stopPropagation();
+    startInlineEdit(editBtn.closest("tr"));
+    return;
+  }
+  if (e.target.closest(".row-edit-input")) return; // don't navigate away while mid-edit
+  const row = e.target.closest("tr[data-name]");
+  if (row) openSymbol(row.dataset.name);
+});
+
+async function deleteWatchlistSymbol(name) {
+  const status = document.getElementById("watchlist-status");
+  try {
+    await getJSON(`/api/watchlist/${name}`, { method: "DELETE" });
+    delete lastQuoteValues[name];
+    await loadWatchlist();
+  } catch (err) {
+    status.textContent = `Could not remove ${name}: ${err.message}`;
+    status.classList.add("error");
+  }
+}
+
+function startInlineEdit(row) {
+  const name = row.dataset.name;
+  const nameSpan = row.querySelector(".sym-name");
+  const original = nameSpan.textContent;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "row-edit-input";
+  input.value = original;
+  nameSpan.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let canceled = false;
+  function revert() {
+    canceled = true;
+    if (input.isConnected) input.replaceWith(nameSpan);
+  }
+
+  async function commit() {
+    if (canceled) return;
+    const newName = input.value.trim().toUpperCase();
+    if (!newName || newName === original) { revert(); return; }
+    input.disabled = true;
+    const status = document.getElementById("watchlist-status");
+    try {
+      await getJSON(`/api/watchlist/${name}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newName }),
+      });
+      if (lastQuoteValues[name] !== undefined) {
+        lastQuoteValues[newName] = lastQuoteValues[name];
+        delete lastQuoteValues[name];
+      }
+      await loadWatchlist(); // rebuilds the whole table, including this row under its new name
+    } catch (err) {
+      input.disabled = false;
+      status.textContent = `Could not rename ${name}: ${err.message}`;
+      status.classList.add("error");
+    }
+  }
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+    if (e.key === "Escape") { e.preventDefault(); revert(); }
+  });
+  input.addEventListener("blur", commit);
+}
+
+document.getElementById("watchlist-add-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = document.getElementById("watchlist-add-input");
+  const name = input.value.trim().toUpperCase();
+  if (!name) return;
+  const status = document.getElementById("watchlist-status");
+  try {
+    await getJSON("/api/watchlist", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
+    });
+    input.value = "";
+    await loadWatchlist();
+  } catch (err) {
+    status.textContent = `Could not add ${name}: ${err.message}`;
+    status.classList.add("error");
+  }
+});
 
 async function refreshWatchlistQuotes() {
   const status = document.getElementById("watchlist-status");

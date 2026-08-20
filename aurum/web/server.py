@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..backtest.adapter import run_strategy
-from ..datafeed import cache, finnhub, fred, universe, yahoo
+from ..datafeed import cache, finnhub, fred, universe, watchlist_store, yahoo
 from ..decision import memo as decision_memo
 from ..forecast import baseline
 from ..optimize import engine as optimize_engine
@@ -146,9 +146,46 @@ def _save_state(state: dict) -> None:
 # ---- watchlist / quotes / history ---------------------------------------
 
 
+def _watchlist_dict(symbols):
+    return [{"name": name, "ticker": universe.resolve(name)} for name in symbols]
+
+
 @app.get("/api/watchlist")
 async def get_watchlist():
-    return [{"name": name, "ticker": universe.resolve(name)} for name in universe.DEFAULT_WATCHLIST]
+    return _watchlist_dict(watchlist_store.load_watchlist())
+
+
+@app.post("/api/watchlist")
+async def post_watchlist(payload: dict):
+    try:
+        symbols = await asyncio.to_thread(watchlist_store.add_symbol, payload.get("name", ""))
+    except watchlist_store.DuplicateSymbolError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return _watchlist_dict(symbols)
+
+
+@app.put("/api/watchlist/{name}")
+async def put_watchlist(name: str, payload: dict):
+    try:
+        symbols = await asyncio.to_thread(watchlist_store.rename_symbol, name, payload.get("name", ""))
+    except watchlist_store.SymbolNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except watchlist_store.DuplicateSymbolError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return _watchlist_dict(symbols)
+
+
+@app.delete("/api/watchlist/{name}")
+async def delete_watchlist(name: str):
+    try:
+        symbols = await asyncio.to_thread(watchlist_store.remove_symbol, name)
+    except watchlist_store.SymbolNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return _watchlist_dict(symbols)
 
 
 @app.get("/api/quote/{name}")
@@ -178,7 +215,7 @@ async def get_history(name: str, range: str = "10y", interval: str = "1d"):
 async def get_optimize(method: str = "hrp"):
     bars_by_symbol = {}
     failed = []
-    for name in universe.DEFAULT_WATCHLIST:
+    for name in watchlist_store.load_watchlist():
         try:
             bars_by_symbol[name] = await asyncio.to_thread(cache.get_history, name, "10y", "1d")
         except yahoo.DataFeedError:
@@ -303,7 +340,7 @@ async def get_fund():
     state = _load_state()
     bars_by_symbol = {}
     fetch_errors = {}
-    for name in universe.DEFAULT_WATCHLIST:
+    for name in watchlist_store.load_watchlist():
         try:
             bars_by_symbol[name] = await asyncio.to_thread(cache.get_history, name, "10y", "1d")
         except yahoo.DataFeedError as e:

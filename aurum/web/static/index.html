@@ -41,12 +41,18 @@
         <div class="card">
           <div class="card-head">
             <h2>Watchlist</h2>
-            <button id="refresh-quotes" type="button">Refresh</button>
+            <div class="card-head-controls">
+              <form id="watchlist-add-form" class="watchlist-add-form">
+                <input type="text" id="watchlist-add-input" placeholder="Add symbol — AAPL, TSLA…" autocomplete="off" autocapitalize="characters" spellcheck="false">
+                <button type="submit">Add</button>
+              </form>
+              <button id="refresh-quotes" type="button">Refresh</button>
+            </div>
           </div>
           <p class="status-line">Click any symbol for its full picture — chart, verdict, bull/bear case, trade plans, risk, forecast, and backtest, all on one page.</p>
           <div class="table-scroll">
             <table id="watchlist-table" class="watchlist-table-big">
-              <thead><tr><th>Symbol</th><th>Ticker</th><th class="c-num">Last</th><th class="c-num">Day High</th><th class="c-num">Day Low</th></tr></thead>
+              <thead><tr><th>Symbol</th><th>Ticker</th><th class="c-num">Last</th><th class="c-num">Day High</th><th class="c-num">Day Low</th><th class="watch-actions-head"></th></tr></thead>
               <tbody id="watchlist-body"></tbody>
             </table>
           </div>

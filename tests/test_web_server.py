@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi.testclient import TestClient
 
-from aurum.datafeed import cache, finnhub, fred, provider, yahoo
+from aurum.datafeed import cache, finnhub, fred, provider, watchlist_store, yahoo
 from aurum.web import server
 
 
@@ -67,6 +67,11 @@ class TestWebServer(unittest.TestCase):
         self._macro_cache_patch.start()
         self._news_cache_patch = patch.object(server, "_news_cache", {})
         self._news_cache_patch.start()
+        # watchlist_store.load_watchlist() falls back to DEFAULT_WATCHLIST when
+        # this file doesn't exist, which is exactly what a clean tempdir gives —
+        # isolates these tests from any real customization on the machine running them.
+        self._watchlist_patch = patch.object(watchlist_store, "WATCHLIST_PATH", Path(self._tmpdir.name) / "watchlist.json")
+        self._watchlist_patch.start()
 
     def tearDown(self):
         self._state_patch.stop()
@@ -75,6 +80,7 @@ class TestWebServer(unittest.TestCase):
         self._env_patch.stop()
         self._macro_cache_patch.stop()
         self._news_cache_patch.stop()
+        self._watchlist_patch.stop()
         self._tmpdir.cleanup()
 
     def test_index_serves_html(self):
@@ -87,6 +93,48 @@ class TestWebServer(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         names = [row["name"] for row in res.json()]
         self.assertIn("GOLD", names)
+
+    def test_watchlist_add(self):
+        res = self.client.post("/api/watchlist", json={"name": "aapl"})
+        self.assertEqual(res.status_code, 200)
+        names = [row["name"] for row in res.json()]
+        self.assertIn("AAPL", names)
+        # persisted -- a fresh GET reflects it too, not just the POST response
+        res = self.client.get("/api/watchlist")
+        self.assertIn("AAPL", [row["name"] for row in res.json()])
+
+    def test_watchlist_add_duplicate_returns_409(self):
+        res = self.client.post("/api/watchlist", json={"name": "GOLD"})
+        self.assertEqual(res.status_code, 409)
+
+    def test_watchlist_add_empty_name_returns_422(self):
+        res = self.client.post("/api/watchlist", json={"name": "   "})
+        self.assertEqual(res.status_code, 422)
+
+    def test_watchlist_delete(self):
+        res = self.client.delete("/api/watchlist/SILVER")
+        self.assertEqual(res.status_code, 200)
+        names = [row["name"] for row in res.json()]
+        self.assertNotIn("SILVER", names)
+
+    def test_watchlist_delete_unknown_symbol_returns_404(self):
+        res = self.client.delete("/api/watchlist/NOTREAL")
+        self.assertEqual(res.status_code, 404)
+
+    def test_watchlist_rename(self):
+        res = self.client.put("/api/watchlist/SILVER", json={"name": "platinum"})
+        self.assertEqual(res.status_code, 200)
+        names = [row["name"] for row in res.json()]
+        self.assertIn("PLATINUM", names)
+        self.assertNotIn("SILVER", names)
+
+    def test_watchlist_rename_unknown_symbol_returns_404(self):
+        res = self.client.put("/api/watchlist/NOTREAL", json={"name": "AAPL"})
+        self.assertEqual(res.status_code, 404)
+
+    def test_watchlist_rename_to_existing_symbol_returns_409(self):
+        res = self.client.put("/api/watchlist/SILVER", json={"name": "gold"})
+        self.assertEqual(res.status_code, 409)
 
     def test_quote_success(self):
         with patch("aurum.datafeed.yahoo.get_quote", side_effect=_fake_quote):
@@ -146,6 +194,15 @@ class TestWebServer(unittest.TestCase):
             self.assertIn(entry["memo"]["verdict"], ["APPROVED", "WATCHLIST", "REJECTED"])
             self.assertIn("risk_reward_ratio", entry["memo"]["plan"])
             self.assertIn("status", entry["memo"]["risk"])
+
+    def test_fund_endpoint_respects_a_customized_watchlist(self):
+        self.client.delete("/api/watchlist/SILVER")
+        self.client.post("/api/watchlist", json={"name": "AAPL"})
+        with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history):
+            res = self.client.get("/api/fund")
+        entry_symbols = {e["symbol"] for e in res.json()["entries"]}
+        self.assertIn("AAPL", entry_symbols)
+        self.assertNotIn("SILVER", entry_symbols)
 
     def test_fund_endpoint_reports_partial_failure_without_crashing(self):
         def flaky_history(symbol, range_="10y", interval="1d"):

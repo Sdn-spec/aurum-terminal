@@ -5,3 +5,4 @@ __pycache__/
 data/cache/
 data/config.json
 data/state.json
+data/watchlist.json

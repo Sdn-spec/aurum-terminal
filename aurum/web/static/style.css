@@ -266,6 +266,29 @@ tbody tr.watch-row.selected { background: var(--accent-wash); box-shadow: inset 
 .watchlist-table-big .sym-icon svg { width: 17px; height: 17px; }
 .watchlist-table-big .sym-cell span { font-weight: 650; font-family: var(--font-display); font-size: 1.05rem; }
 
+.watchlist-add-form { display: flex; gap: 6px; }
+.watchlist-add-form input {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);
+  padding: 8px 11px; font-size: 0.82rem; font-family: var(--font-mono); width: 190px;
+  text-transform: uppercase; transition: border-color 0.2s, box-shadow 0.2s;
+}
+.watchlist-add-form input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); outline: none; }
+
+.watch-actions-head { width: 62px; }
+.watch-actions { white-space: nowrap; text-align: right; }
+.row-edit-btn, .row-delete-btn {
+  background: none; border: 1px solid transparent; border-radius: 6px; color: var(--text-muted);
+  width: 26px; height: 26px; font-size: 0.82rem; line-height: 1; cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.row-edit-btn:hover { color: var(--accent-strong); border-color: var(--border); background: var(--surface-2); }
+.row-delete-btn:hover { color: var(--negative-strong); border-color: var(--border); background: var(--surface-2); }
+.row-edit-input {
+  background: var(--surface-2); border: 1px solid var(--accent); border-radius: 6px; color: var(--text-primary);
+  padding: 4px 7px; font-size: 1.05rem; font-family: var(--font-display); font-weight: 650;
+  text-transform: uppercase; width: 120px;
+}
+
 .sym-cell { display: flex; align-items: center; gap: 8px; }
 .sym-icon {
   width: 22px; height: 22px; border-radius: 50%; flex: none;
