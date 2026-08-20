@@ -53,6 +53,14 @@ class TestFredParsing(unittest.TestCase):
             with self.assertRaises(DataFeedError):
                 fred.get_series("NOTREAL", "fake-key")
 
+    def test_bare_timeout_error_is_wrapped_as_datafeed_error(self):
+        # Regression test: a mid-read timeout comes back from urllib as a bare
+        # TimeoutError, not wrapped in URLError -- this specific gap crashed a
+        # whole live Analyze request instead of just skipping macro data.
+        with patch("urllib.request.urlopen", side_effect=TimeoutError("The read operation timed out")):
+            with self.assertRaises(DataFeedError):
+                fred.get_series("DFF", "fake-key")
+
     def test_get_macro_snapshot_returns_one_entry_per_series_with_latest_and_previous(self):
         with patch("urllib.request.urlopen", return_value=_FakeResponse(SAMPLE_OBSERVATIONS_RESPONSE)):
             snapshot = fred.get_macro_snapshot("fake-key")

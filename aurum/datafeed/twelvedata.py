@@ -45,8 +45,11 @@ def _get(path: str, params: dict) -> dict:
             payload = json.loads(response.read())
     except urllib.error.HTTPError as e:
         raise DataFeedError(f"Twelve Data returned HTTP {e.code} for {params.get('symbol')}") from e
-    except urllib.error.URLError as e:
-        raise DataFeedError(f"Could not reach Twelve Data for {params.get('symbol')}: {e.reason}") from e
+    except (urllib.error.URLError, TimeoutError) as e:
+        # a mid-read timeout comes back as a bare TimeoutError, not wrapped in
+        # URLError -- see aurum.datafeed.yahoo for where this was actually caught live
+        reason = getattr(e, "reason", e)
+        raise DataFeedError(f"Could not reach Twelve Data for {params.get('symbol')}: {reason}") from e
     except json.JSONDecodeError as e:
         raise DataFeedError(f"Twelve Data returned unparseable data for {params.get('symbol')}") from e
 

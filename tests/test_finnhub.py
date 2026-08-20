@@ -25,6 +25,19 @@ SAMPLE_EARNINGS_RESPONSE = {
     ]
 }
 
+# a trimmed real shape -- full field names verified live against AAPL (2026-08-20)
+SAMPLE_METRIC_RESPONSE = {
+    "metric": {
+        "peTTM": 34.3608,
+        "marketCapitalization": 4430136,
+        "epsTTM": 8.7233,
+        "dividendYieldIndicatedAnnual": 0.50534,
+        "netProfitMarginTTM": 27.62,
+        "roeTTM": 137.18,
+        "beta": 1.0852851,
+    }
+}
+
 
 class _FakeResponse:
     def __init__(self, payload):
@@ -62,6 +75,30 @@ class TestFinnhubParsing(unittest.TestCase):
         with patch("urllib.request.urlopen", return_value=_FakeResponse({"earningsCalendar": []})):
             event = finnhub.get_next_earnings("GOLD", "fake-key")
         self.assertIsNone(event)
+
+    def test_bare_timeout_error_is_wrapped_as_datafeed_error(self):
+        # Regression test: a mid-read timeout comes back from urllib as a bare
+        # TimeoutError, not wrapped in URLError -- see aurum.datafeed.yahoo for
+        # where this gap was actually caught live (against FRED, same root cause).
+        with patch("urllib.request.urlopen", side_effect=TimeoutError("The read operation timed out")):
+            with self.assertRaises(finnhub.DataFeedError):
+                finnhub.get_next_earnings("AAPL", "fake-key")
+
+    def test_get_fundamentals_parses_the_real_field_names(self):
+        with patch("urllib.request.urlopen", return_value=_FakeResponse(SAMPLE_METRIC_RESPONSE)):
+            f = finnhub.get_fundamentals("AAPL", "fake-key")
+        self.assertAlmostEqual(f.pe_ttm, 34.3608)
+        self.assertAlmostEqual(f.market_cap_millions, 4430136)
+        self.assertAlmostEqual(f.eps_ttm, 8.7233)
+        self.assertAlmostEqual(f.dividend_yield_pct, 0.50534)
+        self.assertAlmostEqual(f.net_profit_margin_pct, 27.62)
+        self.assertAlmostEqual(f.return_on_equity_pct, 137.18)
+        self.assertAlmostEqual(f.beta, 1.0852851)
+
+    def test_get_fundamentals_returns_none_for_an_empty_metric_block(self):
+        with patch("urllib.request.urlopen", return_value=_FakeResponse({"metric": {}})):
+            f = finnhub.get_fundamentals("NOTREAL", "fake-key")
+        self.assertIsNone(f)
 
 
 class TestFinnhubApiKeyResolution(unittest.TestCase):

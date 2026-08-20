@@ -75,8 +75,19 @@ def _fetch(symbol: str, params: dict, retries: int = 4) -> dict:
                 time.sleep(min(delay, 20))
                 continue
             raise DataFeedError(f"Yahoo returned HTTP {e.code} for {symbol}") from e
-        except urllib.error.URLError as e:
-            raise DataFeedError(f"Could not reach Yahoo Finance for {symbol}: {e.reason}") from e
+        except (urllib.error.URLError, TimeoutError) as e:
+            # A timeout that happens mid-response-read (not at connect time)
+            # comes back as a bare TimeoutError, not wrapped in URLError — a
+            # real gap caught live: FRED hit exactly this and, since it wasn't
+            # caught, crashed the whole Analyze report instead of just skipping
+            # macro data. Retried the same as a 429, since it's just as
+            # transient; only raises once retries are exhausted.
+            last_error = e
+            if attempt < retries - 1:
+                time.sleep(min(2 ** attempt, 20))
+                continue
+            reason = getattr(e, "reason", e)
+            raise DataFeedError(f"Could not reach Yahoo Finance for {symbol}: {reason}") from e
         except json.JSONDecodeError as e:
             raise DataFeedError(f"Yahoo returned unparseable data for {symbol}") from e
     else:

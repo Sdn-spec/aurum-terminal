@@ -73,8 +73,14 @@ def get_series(series_id: str, api_key: str, limit: int = 6) -> List[Tuple[str, 
             payload = json.loads(response.read())
     except urllib.error.HTTPError as e:
         raise DataFeedError(f"FRED returned HTTP {e.code} for {series_id}") from e
-    except urllib.error.URLError as e:
-        raise DataFeedError(f"Could not reach FRED for {series_id}: {e.reason}") from e
+    except (urllib.error.URLError, TimeoutError) as e:
+        # a mid-read timeout (as opposed to connect-time) comes back from
+        # urllib as a bare TimeoutError, not wrapped in URLError -- this is
+        # exactly what crashed the whole Analyze report once, live, before
+        # this was caught here (see aurum.datafeed.yahoo for the same fix
+        # with a retry, and the regression test there for the real traceback)
+        reason = getattr(e, "reason", e)
+        raise DataFeedError(f"Could not reach FRED for {series_id}: {reason}") from e
     except json.JSONDecodeError as e:
         raise DataFeedError(f"FRED returned unparseable data for {series_id}") from e
 

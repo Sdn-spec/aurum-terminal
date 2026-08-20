@@ -95,6 +95,28 @@ class TestYahooClient(unittest.TestCase):
             bars = yahoo.get_history("GC=F")
         self.assertEqual(len(bars), 2)
 
+    def test_bare_timeout_error_is_retried_not_left_unhandled(self):
+        # Regression test: a timeout that happens mid-response-read (as opposed
+        # to at connect time) comes back from urllib as a bare TimeoutError,
+        # not wrapped in URLError -- caught live via FRED hitting exactly this
+        # and crashing a whole request instead of just failing that one call.
+        responses = [TimeoutError("The read operation timed out"), _FakeResponse(SAMPLE_CHART_RESPONSE)]
+
+        def side_effect(*args, **kwargs):
+            result = responses.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        with patch("urllib.request.urlopen", side_effect=side_effect), patch("time.sleep"):
+            bars = yahoo.get_history("GC=F")
+        self.assertEqual(len(bars), 2)
+
+    def test_bare_timeout_error_raises_datafeed_error_once_retries_exhausted(self):
+        with patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")), patch("time.sleep"):
+            with self.assertRaises(yahoo.DataFeedError):
+                yahoo.get_history("GC=F")
+
     def test_429_exhausts_retries_and_raises_datafeed_error(self):
         def always_429(*args, **kwargs):
             raise urllib.error.HTTPError("url", 429, "Too Many Requests", {}, io.BytesIO())

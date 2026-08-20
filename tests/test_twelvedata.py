@@ -80,6 +80,14 @@ class TestTwelveData(unittest.TestCase):
             with self.assertRaises(DataFeedError):
                 twelvedata.get_quote("NOTREAL", "fake-key")
 
+    def test_bare_timeout_error_is_wrapped_as_datafeed_error(self):
+        # Regression test: a mid-read timeout comes back from urllib as a bare
+        # TimeoutError, not wrapped in URLError -- see aurum.datafeed.yahoo for
+        # where this gap was actually caught live (against FRED, same root cause).
+        with patch("urllib.request.urlopen", side_effect=TimeoutError("The read operation timed out")):
+            with self.assertRaises(DataFeedError):
+                twelvedata.get_quote("XAU/USD", "fake-key")
+
 
 if __name__ == "__main__":
     unittest.main()
