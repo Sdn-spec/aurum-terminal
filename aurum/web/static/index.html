@@ -58,6 +58,24 @@
           </div>
           <p id="watchlist-status" class="status-line"></p>
         </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Alerts</h2>
+            <form id="alert-add-form" class="alert-add-form">
+              <select id="alert-symbol"></select>
+              <select id="alert-condition">
+                <option value="above">crosses above</option>
+                <option value="below">crosses below</option>
+              </select>
+              <input type="number" id="alert-price" placeholder="Price" step="any" min="0">
+              <button type="submit">Add alert</button>
+            </form>
+          </div>
+          <p class="status-line">One-shot price alerts — checked against the watchlist's own live quote poll, so they fire within about 45s of the price actually crossing. Removed automatically once triggered.</p>
+          <div id="alerts-list" class="panel-body">No alerts set.</div>
+          <div id="alerts-log"></div>
+        </div>
       </section>
 
       <!-- ===== Symbol detail: everything for one stock, auto-loaded on open ===== -->
@@ -166,6 +184,12 @@
           </div>
           <div id="optimizer-donut" class="donut-wrap" hidden></div>
           <div id="optimizer-output" class="panel-body">Runs skfolio across the whole watchlist.</div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Correlation</h2></div>
+          <p class="status-line">How closely each pair of symbols has moved together historically — positions that look diversified by name can still be riding the same trade.</p>
+          <div id="correlation-output" class="panel-body">Loading…</div>
         </div>
       </section>
 

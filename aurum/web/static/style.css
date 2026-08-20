@@ -274,6 +274,34 @@ tbody tr.watch-row.selected { background: var(--accent-wash); box-shadow: inset 
 }
 .watchlist-add-form input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); outline: none; }
 
+/* alerts */
+.alert-add-form { display: flex; gap: 6px; flex-wrap: wrap; }
+.alert-add-form input, .alert-add-form select {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);
+  padding: 8px 11px; font-size: 0.82rem; font-family: var(--font-mono);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.alert-add-form input { width: 110px; }
+.alert-add-form input:focus-visible, .alert-add-form select:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); outline: none; }
+
+.alert-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 4px; border-bottom: 1px solid var(--border); font-family: var(--font-mono); font-size: 0.85rem;
+}
+.alert-row:last-child { border-bottom: none; }
+.alert-delete-btn {
+  background: none; border: 1px solid transparent; border-radius: 6px; color: var(--text-muted);
+  width: 26px; height: 26px; font-size: 0.82rem; cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.alert-delete-btn:hover { color: var(--negative-strong); border-color: var(--border); background: var(--surface-2); }
+
+.alert-triggered { color: var(--positive-strong); }
+
+.verdict-changed {
+  display: inline-block; margin: 6px 0; padding: 5px 12px; border-radius: 8px; font-size: 0.78rem;
+  background: var(--accent-wash); color: var(--accent-strong); font-family: var(--font-mono);
+}
+
 .watch-actions-head { width: 62px; }
 .watch-actions { white-space: nowrap; text-align: right; }
 .row-edit-btn, .row-delete-btn {
@@ -443,6 +471,12 @@ th.c-num { text-align: right; }
 
 .allocation-bar-track { height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; margin-top: 4px; width: 100%; }
 .allocation-bar-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--accent), var(--accent-strong)); width: 0%; transition: width 0.8s var(--ease-out); box-shadow: 0 0 8px var(--accent-glow); }
+
+/* correlation heatmap */
+.corr-table { border-collapse: collapse; font-family: var(--font-mono); font-size: 0.78rem; }
+.corr-table th { padding: 6px 10px; font-weight: 700; color: var(--text-muted); text-align: center; white-space: nowrap; }
+.corr-table th:first-child { text-align: left; color: var(--text-secondary); }
+.corr-cell { padding: 8px 12px; text-align: center; font-variant-numeric: tabular-nums; border: 1px solid var(--bg); transition: background 0.3s var(--ease-out); }
 
 .foot-note { color: var(--text-muted); font-size: 0.76rem; text-align: center; padding: 10px 0 26px; }
 

@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from ..alerts import store as alerts_store
 from ..backtest.adapter import run_strategy
 from ..datafeed import cache, finnhub, fred, universe, watchlist_store, yahoo
 from ..decision import memo as decision_memo
@@ -79,6 +80,33 @@ def _get_news_and_earnings_cached(symbol: str):
     _news_cache[symbol] = (result, now)
     return result
 
+
+_FUNDAMENTALS_CACHE_TTL_SECONDS = 6 * 3600  # ratios like P/E don't move meaningfully within a day
+_fundamentals_cache: dict = {}  # symbol -> (fundamentals_dict_or_None, fetched_at)
+
+
+def _get_fundamentals_cached(symbol: str) -> Optional[dict]:
+    # same reasoning as _get_news_and_earnings_cached: GOLD/SILVER/BTC/... are
+    # this app's own names, not Finnhub tickers, and some collide with real
+    # unrelated companies -- never send them to a stock-fundamentals endpoint.
+    if universe.is_commodity_or_index_alias(symbol):
+        return None
+    api_key = finnhub.resolve_api_key()
+    if not api_key:
+        return None
+    now = time.time()
+    cached = _fundamentals_cache.get(symbol)
+    if cached and now - cached[1] < _FUNDAMENTALS_CACHE_TTL_SECONDS:
+        return cached[0]
+    try:
+        fundamentals = finnhub.get_fundamentals(symbol, api_key)
+    except yahoo.DataFeedError:
+        return cached[0] if cached else None
+    result = dataclasses.asdict(fundamentals) if fundamentals else None
+    _fundamentals_cache[symbol] = (result, now)
+    return result
+
+
 app = FastAPI(title="Aurum")
 
 
@@ -133,6 +161,7 @@ def _analysis_report_dict(report) -> dict:
         "macro": report.macro,
         "news": report.news,
         "earnings": report.earnings,
+        "fundamentals": report.fundamentals,
     }
 
 
@@ -195,6 +224,38 @@ async def delete_watchlist(name: str):
     return _watchlist_dict(symbols)
 
 
+# ---- price alerts ---------------------------------------------------------
+# There's no background poller in this app -- these are just the persisted
+# rules. The frontend checks them client-side against the watchlist's own
+# live quote poll (see app.js's startLiveWatchlistLoop) and calls DELETE
+# here itself once a rule fires, so alerts are one-shot, not repeating.
+
+
+@app.get("/api/alerts")
+async def get_alerts():
+    return [dataclasses.asdict(a) for a in await asyncio.to_thread(alerts_store.load_price_alerts)]
+
+
+@app.post("/api/alerts")
+async def post_alert(payload: dict):
+    try:
+        alert = await asyncio.to_thread(
+            alerts_store.add_price_alert, payload.get("symbol", ""), payload.get("condition", ""), float(payload.get("price", 0))
+        )
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return dataclasses.asdict(alert)
+
+
+@app.delete("/api/alerts/{alert_id}")
+async def delete_alert(alert_id: str):
+    try:
+        await asyncio.to_thread(alerts_store.remove_price_alert, alert_id)
+    except alerts_store.AlertNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"removed": alert_id}
+
+
 @app.get("/api/quote/{name}")
 async def get_quote(name: str):
     try:
@@ -236,6 +297,27 @@ async def get_optimize(method: str = "hrp"):
         result = optimize_engine.optimize(returns, method=method)
     except Exception as e:  # noqa: BLE001 - skfolio can raise on a near-singular/degenerate correlation structure
         raise HTTPException(status_code=422, detail=f"Optimizer failed on this data ({e}) — try the other method")
+    return {**_to_dict(result), "skipped_symbols": failed}
+
+
+@app.get("/api/correlation")
+async def get_correlation():
+    """Pairwise correlation of daily returns across the whole watchlist —
+    flags positions that look diversified by name but actually move
+    together (Gold/Silver/DXY are the classic case here)."""
+    bars_by_symbol = {}
+    failed = []
+    for name in watchlist_store.load_watchlist():
+        try:
+            bars_by_symbol[name] = await asyncio.to_thread(cache.get_history, name, "10y", "1d")
+        except yahoo.DataFeedError:
+            failed.append(name)
+    if len(bars_by_symbol) < 2:
+        raise HTTPException(status_code=502, detail=f"Not enough symbols loaded to correlate (failed: {failed})")
+    returns = optimize_engine.returns_from_bars(bars_by_symbol)
+    if len(returns) < 30:
+        raise HTTPException(status_code=422, detail="Not enough overlapping history yet to correlate")
+    result = optimize_engine.correlation_matrix(returns)
     return {**_to_dict(result), "skipped_symbols": failed}
 
 
@@ -390,8 +472,8 @@ async def get_analysis(name: str):
     debate + risk check + day-trade and long-term plans, in one call. Works
     for anything cache.get_history can fetch — the default watchlist names
     or a raw ticker like AAPL — not just the commodities in DEFAULT_WATCHLIST.
-    Folds in macro (FRED) and news/earnings (Finnhub) context when a key is
-    configured for either — both are optional and never block the report."""
+    Folds in macro (FRED), news/earnings, and fundamentals (Finnhub) context
+    when a key is configured — all optional, never block the report."""
     try:
         bars = await asyncio.to_thread(cache.get_history, name, "10y", "1d")
     except yahoo.DataFeedError as e:
@@ -400,6 +482,7 @@ async def get_analysis(name: str):
     state = _load_state()
     macro = await asyncio.to_thread(_get_macro_snapshot_cached)
     news, earnings = await asyncio.to_thread(_get_news_and_earnings_cached, name)
+    fundamentals = await asyncio.to_thread(_get_fundamentals_cached, name)
     try:
         result = await asyncio.to_thread(
             analyzer.analyze_symbol,
@@ -411,10 +494,20 @@ async def get_analysis(name: str):
             macro=macro,
             news=news,
             earnings=earnings,
+            fundamentals=fundamentals,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    return _analysis_report_dict(result)
+
+    # "Did this change since I last checked?" -- compared against whatever
+    # verdict was recorded the last time this symbol was analyzed (no
+    # background poller needed; the comparison just happens on next open).
+    previous_verdict = await asyncio.to_thread(alerts_store.get_last_verdict, name)
+    await asyncio.to_thread(alerts_store.set_last_verdict, name, result.verdict)
+
+    response = _analysis_report_dict(result)
+    response["previous_verdict"] = previous_verdict
+    return response
 
 
 # ---- backtest -----------------------------------------------------------------

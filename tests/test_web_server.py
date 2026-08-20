@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi.testclient import TestClient
 
+from aurum.alerts import store as alerts_store
 from aurum.datafeed import cache, finnhub, fred, provider, watchlist_store, yahoo
 from aurum.web import server
 
@@ -61,17 +62,21 @@ class TestWebServer(unittest.TestCase):
         os.environ.pop("TWELVEDATA_API_KEY", None)
         os.environ.pop("FRED_API_KEY", None)
         os.environ.pop("FINNHUB_API_KEY", None)
-        # server._macro_cache/_news_cache are process-global — reset them per test
-        # so one test's fake FRED/Finnhub data can't leak into the next.
+        # server._macro_cache/_news_cache/_fundamentals_cache are process-global —
+        # reset them per test so one test's fake FRED/Finnhub data can't leak into the next.
         self._macro_cache_patch = patch.object(server, "_macro_cache", {"data": None, "at": 0.0})
         self._macro_cache_patch.start()
         self._news_cache_patch = patch.object(server, "_news_cache", {})
         self._news_cache_patch.start()
+        self._fundamentals_cache_patch = patch.object(server, "_fundamentals_cache", {})
+        self._fundamentals_cache_patch.start()
         # watchlist_store.load_watchlist() falls back to DEFAULT_WATCHLIST when
         # this file doesn't exist, which is exactly what a clean tempdir gives —
         # isolates these tests from any real customization on the machine running them.
         self._watchlist_patch = patch.object(watchlist_store, "WATCHLIST_PATH", Path(self._tmpdir.name) / "watchlist.json")
         self._watchlist_patch.start()
+        self._alerts_patch = patch.object(alerts_store, "ALERTS_PATH", Path(self._tmpdir.name) / "alerts.json")
+        self._alerts_patch.start()
 
     def tearDown(self):
         self._state_patch.stop()
@@ -80,7 +85,9 @@ class TestWebServer(unittest.TestCase):
         self._env_patch.stop()
         self._macro_cache_patch.stop()
         self._news_cache_patch.stop()
+        self._fundamentals_cache_patch.stop()
         self._watchlist_patch.stop()
+        self._alerts_patch.stop()
         self._tmpdir.cleanup()
 
     def test_index_serves_html(self):
@@ -135,6 +142,46 @@ class TestWebServer(unittest.TestCase):
     def test_watchlist_rename_to_existing_symbol_returns_409(self):
         res = self.client.put("/api/watchlist/SILVER", json={"name": "gold"})
         self.assertEqual(res.status_code, 409)
+
+    def test_alerts_empty_by_default(self):
+        res = self.client.get("/api/alerts")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json(), [])
+
+    def test_alerts_add_and_list(self):
+        res = self.client.post("/api/alerts", json={"symbol": "gold", "condition": "above", "price": 4500})
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["symbol"], "GOLD")
+        self.assertEqual(body["condition"], "above")
+        self.assertEqual(body["price"], 4500)
+        res = self.client.get("/api/alerts")
+        self.assertEqual(len(res.json()), 1)
+
+    def test_alerts_add_rejects_bad_condition(self):
+        res = self.client.post("/api/alerts", json={"symbol": "GOLD", "condition": "sideways", "price": 4500})
+        self.assertEqual(res.status_code, 422)
+
+    def test_alerts_delete(self):
+        added = self.client.post("/api/alerts", json={"symbol": "GOLD", "condition": "above", "price": 4500}).json()
+        res = self.client.delete(f"/api/alerts/{added['id']}")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(self.client.get("/api/alerts").json(), [])
+
+    def test_alerts_delete_unknown_returns_404(self):
+        res = self.client.delete("/api/alerts/notreal")
+        self.assertEqual(res.status_code, 404)
+
+    def test_analyze_endpoint_previous_verdict_is_none_on_first_check(self):
+        with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history):
+            res = self.client.get("/api/analyze/GOLD")
+        self.assertIsNone(res.json()["previous_verdict"])
+
+    def test_analyze_endpoint_reports_previous_verdict_on_second_check(self):
+        with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history):
+            first = self.client.get("/api/analyze/GOLD").json()
+            second = self.client.get("/api/analyze/GOLD").json()
+        self.assertEqual(second["previous_verdict"], first["verdict"])
 
     def test_quote_success(self):
         with patch("aurum.datafeed.yahoo.get_quote", side_effect=_fake_quote):
@@ -234,6 +281,17 @@ class TestWebServer(unittest.TestCase):
         self.assertEqual(res.status_code, 422)
         self.assertIn("Optimizer failed", res.json()["detail"])
 
+    def test_correlation_endpoint(self):
+        with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history):
+            res = self.client.get("/api/correlation")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        n = len(body["symbols"])
+        self.assertEqual(len(body["matrix"]), n)
+        for i, row in enumerate(body["matrix"]):
+            self.assertEqual(len(row), n)
+            self.assertAlmostEqual(row[i], 1.0, places=4)  # diagonal is always self-correlation
+
     def test_backtest_endpoint_includes_benchmark_curve(self):
         with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history):
             res = self.client.get("/api/backtest/GOLD")
@@ -310,6 +368,36 @@ class TestWebServer(unittest.TestCase):
         self.assertIsNone(body["earnings"])
         mock_news.assert_not_called()
         mock_earnings.assert_not_called()
+
+    def test_analyze_endpoint_folds_in_fundamentals_for_a_real_stock(self):
+        provider.CONFIG_PATH.write_text(json.dumps({"finnhub_api_key": "fake-finnhub"}))
+        fake_fundamentals = finnhub.Fundamentals(
+            pe_ttm=34.36, market_cap_millions=4430136.0, eps_ttm=8.72,
+            dividend_yield_pct=0.5, net_profit_margin_pct=27.6, return_on_equity_pct=137.2, beta=1.09,
+        )
+        with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history), \
+             patch("aurum.datafeed.finnhub.get_fundamentals", return_value=fake_fundamentals):
+            res = self.client.get("/api/analyze/AAPL")
+        body = res.json()
+        self.assertAlmostEqual(body["fundamentals"]["pe_ttm"], 34.36)
+        self.assertAlmostEqual(body["fundamentals"]["market_cap_millions"], 4430136.0)
+
+    def test_analyze_endpoint_never_calls_finnhub_fundamentals_for_a_commodity_alias(self):
+        provider.CONFIG_PATH.write_text(json.dumps({"finnhub_api_key": "fake-finnhub"}))
+        fake_fundamentals = finnhub.Fundamentals(
+            pe_ttm=10.0, market_cap_millions=100.0, eps_ttm=1.0,
+            dividend_yield_pct=1.0, net_profit_margin_pct=1.0, return_on_equity_pct=1.0, beta=1.0,
+        )
+        with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history), \
+             patch("aurum.datafeed.finnhub.get_fundamentals", return_value=fake_fundamentals) as mock_fundamentals:
+            res = self.client.get("/api/analyze/GOLD")
+        self.assertIsNone(res.json()["fundamentals"])
+        mock_fundamentals.assert_not_called()
+
+    def test_analyze_endpoint_fundamentals_is_none_when_no_key_configured(self):
+        with patch("aurum.datafeed.cache.get_history", side_effect=_fake_history):
+            res = self.client.get("/api/analyze/AAPL")
+        self.assertIsNone(res.json()["fundamentals"])
 
     def test_macro_endpoint_returns_empty_list_when_no_key_configured(self):
         res = self.client.get("/api/macro")

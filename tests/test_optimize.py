@@ -41,6 +41,24 @@ class TestOptimizeEngine(unittest.TestCase):
         self.assertEqual(result.method, "fallback:mean_variance")
         self.assertAlmostEqual(sum(result.weights.values()), 1.0, places=6)
 
+    def test_correlation_matrix_is_symmetric_with_unit_diagonal(self):
+        returns = _synthetic_returns()
+        result = engine.correlation_matrix(returns)
+        self.assertEqual(result.symbols, ["A", "B", "C"])
+        for i in range(3):
+            self.assertAlmostEqual(result.matrix[i][i], 1.0, places=6)
+        for i in range(3):
+            for j in range(3):
+                self.assertAlmostEqual(result.matrix[i][j], result.matrix[j][i], places=9)
+
+    def test_correlation_matrix_detects_perfectly_correlated_series(self):
+        base = np.random.default_rng(1).normal(0.0003, 0.01, 300)
+        returns = pd.DataFrame({"X": base, "Y": base, "Z": -base})  # Y tracks X exactly, Z inverse
+        result = engine.correlation_matrix(returns)
+        x, y, z = result.symbols.index("X"), result.symbols.index("Y"), result.symbols.index("Z")
+        self.assertAlmostEqual(result.matrix[x][y], 1.0, places=6)
+        self.assertAlmostEqual(result.matrix[x][z], -1.0, places=6)
+
     def test_returns_from_bars_aligns_on_shared_timestamps(self):
         bars_a = [HistoryBar(1000 + i * 86400, 1, 1, 1, 100 + i, 0) for i in range(5)]
         bars_b = [HistoryBar(1000 + i * 86400, 1, 1, 1, 50 + i, 0) for i in range(3, 8)]  # partial overlap

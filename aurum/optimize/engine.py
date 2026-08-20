@@ -32,6 +32,12 @@ class OptimizationResult:
     method: str
 
 
+@dataclass
+class CorrelationResult:
+    symbols: List[str]
+    matrix: List[List[float]]  # matrix[i][j] = correlation between symbols[i] and symbols[j]
+
+
 def _annualize(daily_mean: float, daily_std: float, periods_per_year: int = 252):
     return daily_mean * periods_per_year, daily_std * np.sqrt(periods_per_year)
 
@@ -93,6 +99,15 @@ def optimize(returns: pd.DataFrame, method: str = "mean_risk", risk_aversion: fl
         sharpe_ratio=float(sharpe),
         method=used_method,
     )
+
+
+def correlation_matrix(returns: pd.DataFrame) -> CorrelationResult:
+    """Pairwise Pearson correlation of daily returns across the whole
+    watchlist — flags when positions that look diversified by name (Gold,
+    Silver, DXY) are actually moving together, something the Optimizer's
+    weights alone don't make visible at a glance."""
+    corr = returns.corr()
+    return CorrelationResult(symbols=list(corr.columns), matrix=corr.to_numpy().tolist())
 
 
 def returns_from_bars(bars_by_symbol: Dict[str, List]) -> pd.DataFrame:

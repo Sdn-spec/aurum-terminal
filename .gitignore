@@ -6,3 +6,4 @@ data/cache/
 data/config.json
 data/state.json
 data/watchlist.json
+data/alerts.json

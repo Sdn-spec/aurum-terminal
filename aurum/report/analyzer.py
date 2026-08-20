@@ -93,6 +93,7 @@ class AnalysisReport:
     macro: List[dict] = field(default_factory=list)
     news: List[dict] = field(default_factory=list)
     earnings: Optional[dict] = None
+    fundamentals: Optional[dict] = None
 
 
 def _ema_series(values: List[float], period: int) -> List[float]:
@@ -255,6 +256,7 @@ def analyze_symbol(
     macro: Optional[List[dict]] = None,
     news: Optional[List[dict]] = None,
     earnings: Optional[dict] = None,
+    fundamentals: Optional[dict] = None,
 ) -> AnalysisReport:
     """The full one-input pipeline: scan -> research -> debate -> day-trade
     and long-term plans -> risk gate -> scored verdict. `bars` must be daily
@@ -360,4 +362,5 @@ def analyze_symbol(
         macro=macro or [],
         news=news or [],
         earnings=earnings,
+        fundamentals=fundamentals,
     )

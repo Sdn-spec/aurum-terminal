@@ -92,6 +92,7 @@ function switchView(viewName) {
   if (viewName === "symbol") {
     requestAnimationFrame(() => { resizePriceChart(); resizeBacktestChart(); });
   }
+  if (viewName === "optimizer") loadCorrelation();
 }
 document.getElementById("topnav").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-view]");
@@ -170,6 +171,15 @@ async function buildWatchlistRows() {
         `<td class="watch-actions"><button type="button" class="row-edit-btn" title="Rename">✎</button><button type="button" class="row-delete-btn" title="Remove">✕</button></td></tr>`
     )
     .join("");
+  populateAlertSymbolSelect();
+}
+
+function populateAlertSymbolSelect() {
+  const select = document.getElementById("alert-symbol");
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = watchlistDefs.map((w) => `<option value="${w.name}">${w.name}</option>`).join("");
+  if (current && watchlistDefs.some((w) => w.name === current)) select.value = current;
 }
 
 // A single delegated listener (rather than one per row) survives buildWatchlistRows()
@@ -298,6 +308,7 @@ async function refreshWatchlistQuotes() {
         const priceEl = document.getElementById("symbol-price");
         if (priceEl) priceEl.textContent = fmtPlain(quote.price);
       }
+      await checkPriceAlerts(name, quote.price);
     } catch (err) {
       errors++;
     }
@@ -313,6 +324,91 @@ async function loadWatchlist() {
   await refreshWatchlistQuotes();
 }
 document.getElementById("refresh-quotes").addEventListener("click", () => refreshWatchlistQuotes());
+
+// ---- price alerts (one-shot, checked client-side against the live poll) -----
+// No background poller exists in this app -- these rules are just persisted
+// server-side. The actual check happens here, every ~45s, against the same
+// quotes refreshWatchlistQuotes() already fetches for the table.
+
+let priceAlerts = []; // {id, symbol, condition, price}[]
+
+async function loadAlerts() {
+  priceAlerts = await getJSON("/api/alerts");
+  renderAlertsList();
+}
+
+function renderAlertsList() {
+  const out = document.getElementById("alerts-list");
+  if (!out) return;
+  if (!priceAlerts.length) { out.textContent = "No alerts set."; return; }
+  out.innerHTML = priceAlerts
+    .map(
+      (a) =>
+        `<div class="alert-row" data-id="${a.id}"><span>${escapeHtml(a.symbol)} ${a.condition === "above" ? "▲ above" : "▼ below"} ${fmtPlain(a.price)}</span>` +
+        `<button type="button" class="alert-delete-btn" data-id="${a.id}" title="Remove">✕</button></div>`
+    )
+    .join("");
+}
+
+document.getElementById("alerts-list").addEventListener("click", async (e) => {
+  const btn = e.target.closest(".alert-delete-btn");
+  if (!btn) return;
+  try {
+    await getJSON(`/api/alerts/${btn.dataset.id}`, { method: "DELETE" });
+  } catch (err) {
+    // already gone (e.g. it just fired elsewhere) -- fine, resync below regardless
+  }
+  priceAlerts = priceAlerts.filter((a) => a.id !== btn.dataset.id);
+  renderAlertsList();
+});
+
+document.getElementById("alert-add-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+  const symbol = document.getElementById("alert-symbol").value;
+  const condition = document.getElementById("alert-condition").value;
+  const priceInput = document.getElementById("alert-price");
+  const price = parseFloat(priceInput.value);
+  if (!symbol || !price || price <= 0) return;
+  const out = document.getElementById("alerts-list");
+  try {
+    const alert = await getJSON("/api/alerts", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, condition, price }),
+    });
+    priceAlerts.push(alert);
+    renderAlertsList();
+    priceInput.value = "";
+  } catch (err) {
+    out.innerHTML = `<p class="status-line error">Could not add alert: ${escapeHtml(err.message)}</p>` + out.innerHTML;
+  }
+});
+
+function logAlertTrigger(message) {
+  const log = document.getElementById("alerts-log");
+  const line = document.createElement("p");
+  line.className = "status-line alert-triggered";
+  line.innerHTML = `<span class="live-dot"></span>${escapeHtml(message)}`;
+  log.prepend(line);
+  if ("Notification" in window && Notification.permission === "granted") {
+    new Notification("Aurum alert", { body: message });
+  }
+}
+
+async function checkPriceAlerts(symbol, price) {
+  const hits = priceAlerts.filter(
+    (a) => a.symbol === symbol && ((a.condition === "above" && price >= a.price) || (a.condition === "below" && price <= a.price))
+  );
+  for (const alert of hits) {
+    try {
+      await getJSON(`/api/alerts/${alert.id}`, { method: "DELETE" });
+    } catch (err) {
+      // already removed some other way -- still worth reporting the trigger below
+    }
+    priceAlerts = priceAlerts.filter((a) => a.id !== alert.id);
+    logAlertTrigger(`${symbol} ${alert.condition === "above" ? "crossed above" : "crossed below"} ${fmtPlain(alert.price)} — now ${fmtPlain(price)}`);
+  }
+  if (hits.length) renderAlertsList();
+}
 
 async function startLiveWatchlistLoop() {
   while (true) {
@@ -648,6 +744,28 @@ function renderMacroSection(macro) {
     </div>`;
 }
 
+function fmtMarketCap(millions) {
+  if (millions === null || millions === undefined) return "—";
+  if (millions >= 1e6) return "$" + (millions / 1e6).toFixed(2) + "T";
+  if (millions >= 1e3) return "$" + (millions / 1e3).toFixed(1) + "B";
+  return "$" + millions.toFixed(0) + "M";
+}
+
+function renderFundamentalsSection(f) {
+  if (!f) return "";
+  return `
+    <h4 class="report-section-title">Fundamentals <span class="muted" style="font-weight:400">— via Finnhub, stock tickers only</span></h4>
+    <div class="research-grid">
+      <div class="research-stat"><div class="stat-label">P/E (TTM)</div><div class="stat-value">${f.pe_ttm !== null && f.pe_ttm !== undefined ? f.pe_ttm.toFixed(1) : "—"}</div></div>
+      <div class="research-stat"><div class="stat-label">Market cap</div><div class="stat-value">${fmtMarketCap(f.market_cap_millions)}</div></div>
+      <div class="research-stat"><div class="stat-label">EPS (TTM)</div><div class="stat-value">${f.eps_ttm !== null && f.eps_ttm !== undefined ? fmtPlain(f.eps_ttm) : "—"}</div></div>
+      <div class="research-stat"><div class="stat-label">Dividend yield</div><div class="stat-value">${f.dividend_yield_pct !== null && f.dividend_yield_pct !== undefined ? f.dividend_yield_pct.toFixed(2) + "%" : "—"}</div></div>
+      <div class="research-stat"><div class="stat-label">Net margin (TTM)</div><div class="stat-value">${f.net_profit_margin_pct !== null && f.net_profit_margin_pct !== undefined ? f.net_profit_margin_pct.toFixed(1) + "%" : "—"}</div></div>
+      <div class="research-stat"><div class="stat-label">ROE (TTM)</div><div class="stat-value">${f.return_on_equity_pct !== null && f.return_on_equity_pct !== undefined ? f.return_on_equity_pct.toFixed(1) + "%" : "—"}</div></div>
+      <div class="research-stat"><div class="stat-label">Beta</div><div class="stat-value">${f.beta !== null && f.beta !== undefined ? f.beta.toFixed(2) : "—"}</div></div>
+    </div>`;
+}
+
 function renderNewsSection(news, earnings) {
   if ((!news || !news.length) && !earnings) return "";
   const earningsHtml = earnings
@@ -669,8 +787,13 @@ function renderNewsSection(news, earnings) {
 function renderAnalysis(r) {
   const out = document.getElementById("analyze-output");
   const research = r.research;
+  const verdictChangedHtml =
+    r.previous_verdict && r.previous_verdict !== r.verdict
+      ? `<div class="verdict-changed">Changed from <strong>${escapeHtml(r.previous_verdict)}</strong> since you last checked this symbol.</div>`
+      : "";
   out.innerHTML = `
     <span class="verdict-pill verdict-${r.verdict}">${r.verdict}</span><span class="confidence-tag">${r.confidence} confidence</span>
+    ${verdictChangedHtml}
     <p style="margin:10px 0 4px">${escapeHtml(r.summary)}</p>
 
     <div class="research-grid">
@@ -684,6 +807,7 @@ function renderAnalysis(r) {
       <div class="research-stat"><div class="stat-label">1y low</div><div class="stat-value">${fmtPlain(research.year_low)} <span class="muted">(${fmtPct(research.distance_from_year_low_pct)})</span></div></div>
     </div>
 
+    ${renderFundamentalsSection(r.fundamentals)}
     ${renderMacroSection(r.macro)}
     ${renderNewsSection(r.news, r.earnings)}
 
@@ -770,6 +894,41 @@ document.getElementById("run-optimizer").addEventListener("click", async () => {
     out.textContent = "Error: " + err.message;
   }
 });
+
+// ---- correlation (heatmap, auto-loads whenever the Optimizer view opens) ----
+
+function renderCorrelationGrid(symbols, matrix) {
+  const cellStyle = (v) => {
+    const pct = Math.round(Math.abs(v) * 70); // capped so the number underneath stays legible
+    const color = v >= 0 ? "var(--positive)" : "var(--negative)";
+    return `background: color-mix(in srgb, ${color} ${pct}%, var(--surface-2));`;
+  };
+  const header = `<th></th>` + symbols.map((s) => `<th>${escapeHtml(s)}</th>`).join("");
+  const rows = symbols
+    .map(
+      (rowSym, i) =>
+        `<tr><th>${escapeHtml(rowSym)}</th>` +
+        matrix[i].map((v) => `<td class="corr-cell" style="${cellStyle(v)}">${v.toFixed(2)}</td>`).join("") +
+        `</tr>`
+    )
+    .join("");
+  return `<div class="table-scroll"><table class="corr-table"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+async function loadCorrelation() {
+  const out = document.getElementById("correlation-output");
+  out.innerHTML = loadingHtml("Computing correlations…");
+  try {
+    const r = await getJSON("/api/correlation");
+    let html = renderCorrelationGrid(r.symbols, r.matrix);
+    if (r.skipped_symbols.length) {
+      html += `<p class="status-line" style="margin-top:10px">Skipped (no data): ${escapeHtml(r.skipped_symbols.join(", "))}</p>`;
+    }
+    out.innerHTML = html;
+  } catch (err) {
+    out.textContent = "Error: " + err.message;
+  }
+}
 
 // ---- forecast ---------------------------------------------------------------
 
@@ -945,5 +1104,6 @@ document.getElementById("run-fund").addEventListener("click", async () => {
 
 loadState();
 loadWatchlist().then(startLiveWatchlistLoop);
+loadAlerts();
 startLiveChartLoop();
 setInterval(() => { renderWatchlistStatus(); renderChartSummary(); }, 1000); // ticks the "updated Ns ago" text between real polls

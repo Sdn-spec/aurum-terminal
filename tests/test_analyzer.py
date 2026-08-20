@@ -69,18 +69,22 @@ class TestAnalyzeSymbol(unittest.TestCase):
         self.assertEqual(report.macro, [])
         self.assertEqual(report.news, [])
         self.assertIsNone(report.earnings)
+        self.assertIsNone(report.fundamentals)
 
     def test_macro_news_earnings_pass_through_unchanged_when_supplied(self):
         bars = _trending_bars(step=0.3)
         macro = [{"key": "fed_funds_rate", "latest_value": 4.33}]
         news = [{"headline": "Something happened"}]
         earnings = {"date": "2026-11-05", "eps_estimate": 1.42}
+        fundamentals = {"pe_ttm": 34.36, "market_cap_millions": 4430136}
         report = analyzer.analyze_symbol(
-            "TEST", bars, equity=3000.0, peak_equity=3000.0, macro=macro, news=news, earnings=earnings
+            "TEST", bars, equity=3000.0, peak_equity=3000.0,
+            macro=macro, news=news, earnings=earnings, fundamentals=fundamentals,
         )
         self.assertEqual(report.macro, macro)
         self.assertEqual(report.news, news)
         self.assertEqual(report.earnings, earnings)
+        self.assertEqual(report.fundamentals, fundamentals)
         # informational only -- passing macro/news/earnings must not change the score
         baseline = analyzer.analyze_symbol("TEST", bars, equity=3000.0, peak_equity=3000.0)
         self.assertEqual(report.score, baseline.score)
