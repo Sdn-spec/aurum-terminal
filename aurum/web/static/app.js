@@ -149,15 +149,22 @@ function waitForVisible() {
 function renderWatchlistStatus() {
   const status = document.getElementById("watchlist-status");
   if (!status) return;
-  if (watchlistLastErrorCount > 0) {
-    status.innerHTML = `<span class="live-dot error"></span>${watchlistLastErrorCount} error(s) — Yahoo may be rate-limiting; retrying automatically.`;
-    status.classList.add("error");
-    return;
-  }
   if (!watchlistLiveAt) return;
+  // The live pulse and the "updated Ns ago" ticker must always show, even when
+  // a symbol is failing -- some symbols (NASDAQ, SILVER, OIL) are known gaps on
+  // the free data tier and fail on essentially every cycle, so gating the live
+  // indicator on "zero errors" meant it was permanently hidden behind a static
+  // error message instead of ticking alongside it. Found live: reported as
+  // "the Live indicator never moves," traced to exactly this early return.
   const secs = Math.max(0, Math.round((Date.now() - watchlistLiveAt) / 1000));
-  status.innerHTML = `<span class="live-dot"></span>Live · updated ${secs}s ago`;
-  status.classList.remove("error");
+  const liveText = `<span class="live-dot${watchlistLastErrorCount > 0 ? " error" : ""}"></span>Live · updated ${secs}s ago`;
+  if (watchlistLastErrorCount > 0) {
+    status.innerHTML = `${liveText} · ${watchlistLastErrorCount} symbol(s) failing — Yahoo may be rate-limiting; retrying automatically.`;
+    status.classList.add("error");
+  } else {
+    status.innerHTML = liveText;
+    status.classList.remove("error");
+  }
 }
 
 async function buildWatchlistRows() {
