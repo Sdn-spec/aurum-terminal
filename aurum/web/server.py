@@ -317,10 +317,21 @@ _MARKETS_BATCH_COOLDOWN_SECONDS = 120.0
 # every 45s. Slowing it to 3 minutes keeps the fallback usable without it
 # becoming the thing that gets the IP throttled.
 _MARKETS_FALLBACK_QUOTE_TTL_SECONDS = 180.0
+# How long the per-symbol fallback may spend walking the board. When Yahoo is
+# throttling, each symbol burns several seconds of retry-with-backoff inside
+# the client before giving up, so an unbounded walk over 29 instruments runs
+# for minutes -- which is exactly what it did the first time this was pointed
+# at a rate-limited feed.
+_MARKETS_FALLBACK_DEADLINE_SECONDS = 20.0
 _markets_snapshot = {"rows": None, "at": 0.0, "error": None, "degraded": False, "batch_blocked_until": 0.0}
 _markets_stats = {"data": {}, "at": 0.0}
 _markets_snapshot_lock = threading.Lock()
 _markets_stats_lock = threading.Lock()
+# Refreshes run off the request path (see _kick_markets_refresh): a dashboard
+# must never make the browser wait on a slow upstream, and with a 5s poll a
+# blocking refresh would just pile requests up behind each other.
+_markets_refresh_thread: Optional[threading.Thread] = None
+_markets_refresh_guard = threading.Lock()
 
 
 def _refresh_markets_snapshot() -> None:
@@ -348,7 +359,8 @@ def _refresh_markets_snapshot() -> None:
         # it keeps the dashboard populated instead of blank.
         try:
             rows = markets.fetch_board_via_quote_cache(
-                lambda t: cache.get_quote(t, max_age_seconds=_MARKETS_FALLBACK_QUOTE_TTL_SECONDS)
+                lambda t: cache.get_quote(t, max_age_seconds=_MARKETS_FALLBACK_QUOTE_TTL_SECONDS),
+                deadline_seconds=_MARKETS_FALLBACK_DEADLINE_SECONDS,
             )
             _markets_snapshot["rows"] = rows
             _markets_snapshot["at"] = time.time()
@@ -400,15 +412,43 @@ def _markets_payload() -> dict:
     }
 
 
+def _markets_refresh_worker() -> None:
+    global _markets_refresh_thread
+    try:
+        _refresh_markets_snapshot()
+        if not _markets_stats["data"] or time.time() - _markets_stats["at"] >= _MARKETS_STATS_TTL_SECONDS:
+            _refresh_markets_stats()
+    finally:
+        with _markets_refresh_guard:
+            _markets_refresh_thread = None
+
+
+def _kick_markets_refresh() -> None:
+    """Start a refresh in the background if one isn't already running, and
+    return immediately. The request never waits on Yahoo."""
+    global _markets_refresh_thread
+    with _markets_refresh_guard:
+        if _markets_refresh_thread is not None:
+            return
+        _markets_refresh_thread = threading.Thread(target=_markets_refresh_worker, daemon=True)
+        _markets_refresh_thread.start()
+
+
 @app.get("/api/markets")
 async def get_markets():
-    if time.time() - _markets_snapshot["at"] >= _MARKETS_SNAPSHOT_TTL_SECONDS:
-        await asyncio.to_thread(_refresh_markets_snapshot)
-    if not _markets_stats["data"] or time.time() - _markets_stats["at"] >= _MARKETS_STATS_TTL_SECONDS:
-        await asyncio.to_thread(_refresh_markets_stats)
+    stale_snapshot = time.time() - _markets_snapshot["at"] >= _MARKETS_SNAPSHOT_TTL_SECONDS
+    missing_stats = not _markets_stats["data"]
+    if stale_snapshot or missing_stats:
+        _kick_markets_refresh()
+
     payload = _markets_payload()
-    if not payload["rows"] and payload["error"]:
-        raise HTTPException(status_code=502, detail=payload["error"])
+    if not payload["rows"]:
+        if payload["error"]:
+            raise HTTPException(status_code=502, detail=payload["error"])
+        # First load, refresh still in flight. 202 rather than an error: the
+        # board is coming, and the frontend is already polling every few
+        # seconds, so it will pick it up on the next tick.
+        return JSONResponse(status_code=202, content={**payload, "warming_up": True})
     return payload
 
 

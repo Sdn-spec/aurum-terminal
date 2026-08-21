@@ -1278,6 +1278,7 @@ let marketsRows = [];
 let marketsAsOf = null;
 let marketsStale = false;
 let marketsDegraded = false;
+let marketsWarmingUp = false;
 let marketsLastError = null;
 const marketsLastPrice = {}; // ticker -> last seen price, for the tick flash
 
@@ -1424,6 +1425,11 @@ function renderMarketsRegions() {
   const wrap = document.getElementById("markets-regions");
   if (!wrap) return;
   if (!marketsRows.length) {
+    if (marketsWarmingUp && !marketsLastError) {
+      wrap.innerHTML =
+        `<div class="card">${loadingHtml("Fetching the global board — this can take a few seconds on first load.")}</div>`;
+      return;
+    }
     // Most likely cause by far is Yahoo rate-limiting this IP, so say that
     // plainly instead of leaving an empty panel that looks broken.
     wrap.innerHTML =
@@ -1484,6 +1490,10 @@ function renderMarketsStatus() {
     return;
   }
   el.classList.remove("error");
+  if (marketsWarmingUp && !marketsRows.length) {
+    el.innerHTML = `<span class="spinner"></span>Fetching the global board…`;
+    return;
+  }
   const age = marketsAsOf ? Math.max(0, Math.round(Date.now() / 1000 - marketsAsOf)) : null;
   const paused = marketsRefreshMs === 0;
   const dot = paused ? "" : `<span class="live-dot${marketsStale ? " error" : ""}"></span>`;
@@ -1503,6 +1513,7 @@ async function loadMarkets() {
     marketsAsOf = data.as_of;
     marketsStale = !!data.stale;
     marketsDegraded = !!data.degraded;
+    marketsWarmingUp = !!data.warming_up;
     marketsLastError = null;
     renderMarketsCards();
     renderMarketsTreemap();

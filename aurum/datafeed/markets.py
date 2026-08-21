@@ -240,7 +240,7 @@ def _row_from_quote(idx: Index, q: dict) -> MarketRow:
     )
 
 
-def fetch_board_via_quote_cache(get_quote) -> List[MarketRow]:
+def fetch_board_via_quote_cache(get_quote, deadline_seconds: Optional[float] = None) -> List[MarketRow]:
     """Fallback path for when the batched endpoint is unavailable (no crumb,
     or Yahoo is rate-limiting the v7 API specifically).
 
@@ -248,12 +248,21 @@ def fetch_board_via_quote_cache(get_quote) -> List[MarketRow]:
     short-TTL disk cache -- so this walks the board without generating a
     burst of fresh upstream requests on every refresh, and any instrument
     that can't be fetched just comes back priceless instead of failing the
-    whole board. Slower to go green than the batch path, but it keeps the
-    dashboard working rather than empty.
+    whole board.
+
+    `deadline_seconds` bounds the whole walk. It matters more than it looks:
+    when Yahoo is rate-limiting, every symbol costs several seconds of
+    retry-with-backoff inside the client before it gives up, so an unbounded
+    walk over the board takes minutes. Past the deadline the remaining
+    instruments are returned priceless rather than waited on.
     """
+    started = time.time()
     rows = []
     got_any = False
     for idx in INDICES:
+        if deadline_seconds is not None and time.time() - started > deadline_seconds:
+            rows.append(MarketRow(code=idx.code, label=idx.label, ticker=idx.ticker, region=idx.region))
+            continue
         try:
             q = get_quote(idx.ticker)
             got_any = True

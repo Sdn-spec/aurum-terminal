@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import zlib
@@ -84,6 +85,14 @@ class TestWebServer(unittest.TestCase):
         self._journal_patch.start()
 
     def tearDown(self):
+        # A markets refresh runs on a background thread. If one outlived its
+        # test it would keep running after the mocks are torn down and hit the
+        # real network, which both flakes the suite and pokes a rate-limited
+        # upstream -- so wait for it here.
+        thread = server._markets_refresh_thread
+        if thread is not None:
+            thread.join(timeout=15)
+        server._markets_refresh_thread = None
         self._state_patch.stop()
         self._cache_patch.stop()
         self._config_patch.stop()
@@ -183,6 +192,57 @@ class TestWebServer(unittest.TestCase):
             {"rows": None, "at": 0.0, "error": None, "degraded": False, "batch_blocked_until": 0.0}
         )
         server._markets_stats.update({"data": {}, "at": 0.0})
+        server._markets_refresh_thread = None
+
+    def _markets_get(self):
+        """GET the board, waiting out the background refresh.
+
+        The endpoint deliberately never blocks on the upstream fetch, so the
+        first call can return 202 "warming up" while the refresh thread is
+        still working. Tests want the settled board, so join the worker and
+        read again.
+        """
+        deadline = time.time() + 15
+        while True:
+            res = self.client.get("/api/markets")
+            if res.status_code != 202:
+                return res
+            # Still warming up. The worker may already have finished between
+            # the kick and the payload being built, so poll rather than
+            # relying on catching the thread handle while it is still set.
+            thread = server._markets_refresh_thread
+            if thread is not None:
+                thread.join(timeout=15)
+            elif time.time() > deadline:
+                return res
+            else:
+                time.sleep(0.01)
+
+    def test_markets_first_call_returns_202_while_the_refresh_is_in_flight(self):
+        """The dashboard must never make the browser wait on Yahoo -- a slow
+        upstream returns "warming up" immediately, not a hung request."""
+        self._reset_markets_caches()
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_board():
+            started.set()
+            release.wait(timeout=10)
+            return [markets.MarketRow(code="SPX", label="S&P 500", ticker="^GSPC", region="Americas", price=1.0)]
+
+        with patch.object(markets, "fetch_board", side_effect=slow_board), \
+             patch.object(server, "_refresh_markets_stats"):
+            res = self.client.get("/api/markets")
+            self.assertTrue(started.wait(timeout=5))
+            self.assertEqual(res.status_code, 202)
+            self.assertTrue(res.json()["warming_up"])
+            self.assertEqual(res.json()["rows"], [])
+            release.set()
+            thread = server._markets_refresh_thread
+            if thread:
+                thread.join(timeout=10)
+            # once the refresh lands, the same endpoint serves the real board
+            self.assertEqual(self.client.get("/api/markets").status_code, 200)
 
     def test_markets_batch_is_not_retried_on_every_refresh_after_it_fails(self):
         """A failing batch endpoint must not mean a fresh cookie+crumb attempt
@@ -193,11 +253,11 @@ class TestWebServer(unittest.TestCase):
         with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("429")) as batch, \
              patch.object(markets, "fetch_board_via_quote_cache", return_value=fallback_rows), \
              patch.object(server, "_refresh_markets_stats"):
-            self.client.get("/api/markets")
+            self._markets_get()
             server._markets_snapshot["at"] = 0.0  # expire the snapshot
-            self.client.get("/api/markets")
+            self._markets_get()
             server._markets_snapshot["at"] = 0.0
-            self.client.get("/api/markets")
+            self._markets_get()
         # three refreshes, but the batch endpoint was only attempted once
         self.assertEqual(batch.call_count, 1)
 
@@ -208,7 +268,7 @@ class TestWebServer(unittest.TestCase):
         with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("429")), \
              patch.object(markets, "fetch_board_via_quote_cache", return_value=fallback_rows), \
              patch.object(server, "_refresh_markets_stats"):
-            res = self.client.get("/api/markets")
+            res = self._markets_get()
         self.assertTrue(res.json()["degraded"])
 
     def test_markets_board_returns_rows_grouped_by_region(self):
@@ -220,7 +280,7 @@ class TestWebServer(unittest.TestCase):
         ]
         with patch.object(markets, "fetch_board", return_value=rows), \
              patch.object(server, "_refresh_markets_stats"):
-            res = self.client.get("/api/markets")
+            res = self._markets_get()
         self.assertEqual(res.status_code, 200)
         body = res.json()
         self.assertEqual(body["regions"], markets.REGIONS)
@@ -234,9 +294,9 @@ class TestWebServer(unittest.TestCase):
         rows = [markets.MarketRow(code="SPX", label="S&P 500", ticker="^GSPC", region="Americas", price=1.0)]
         with patch.object(markets, "fetch_board", return_value=rows) as fetch, \
              patch.object(server, "_refresh_markets_stats"):
-            self.client.get("/api/markets")
-            self.client.get("/api/markets")
-            self.client.get("/api/markets")
+            self._markets_get()
+            self._markets_get()
+            self._markets_get()
         # three client calls inside the 5s TTL must collapse to one upstream fetch
         self.assertEqual(fetch.call_count, 1)
 
@@ -245,14 +305,14 @@ class TestWebServer(unittest.TestCase):
         rows = [markets.MarketRow(code="SPX", label="S&P 500", ticker="^GSPC", region="Americas", price=1.0)]
         with patch.object(markets, "fetch_board", return_value=rows), \
              patch.object(server, "_refresh_markets_stats"):
-            self.client.get("/api/markets")
+            self._markets_get()
         # force the cache to look expired, then make BOTH upstream paths fail
         # (the batch endpoint and the per-symbol fallback it degrades to)
         server._markets_snapshot["at"] = 0.0
         with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("rate limited")), \
              patch.object(markets, "fetch_board_via_quote_cache", side_effect=yahoo.DataFeedError("also rate limited")), \
              patch.object(server, "_refresh_markets_stats"):
-            res = self.client.get("/api/markets")
+            res = self._markets_get()
         self.assertEqual(res.status_code, 200)
         body = res.json()
         self.assertTrue(body["stale"])
@@ -263,7 +323,7 @@ class TestWebServer(unittest.TestCase):
         with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("rate limited")), \
              patch.object(markets, "fetch_board_via_quote_cache", side_effect=yahoo.DataFeedError("also rate limited")), \
              patch.object(server, "_refresh_markets_stats"):
-            res = self.client.get("/api/markets")
+            res = self._markets_get()
         self.assertEqual(res.status_code, 502)
 
     def test_markets_board_falls_back_to_per_symbol_quotes_when_batch_fails(self):
@@ -273,7 +333,7 @@ class TestWebServer(unittest.TestCase):
         with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("no crumb")), \
              patch.object(markets, "fetch_board_via_quote_cache", return_value=fallback_rows) as fb, \
              patch.object(server, "_refresh_markets_stats"):
-            res = self.client.get("/api/markets")
+            res = self._markets_get()
         self.assertEqual(res.status_code, 200)
         body = res.json()
         self.assertEqual(fb.call_count, 1)
@@ -286,7 +346,7 @@ class TestWebServer(unittest.TestCase):
         server._markets_stats["data"] = {"^GSPC": {"change_1m_pct": 2.5, "change_1y_pct": 18.0, "spark": [1.0, 2.0]}}
         server._markets_stats["at"] = time.time()
         with patch.object(markets, "fetch_board", return_value=rows):
-            res = self.client.get("/api/markets")
+            res = self._markets_get()
         row = res.json()["rows"][0]
         self.assertEqual(row["change_1m_pct"], 2.5)
         self.assertEqual(row["change_1y_pct"], 18.0)
