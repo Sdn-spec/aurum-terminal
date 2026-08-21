@@ -76,7 +76,7 @@ function iconFor(name) {
   return `<span class="sym-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[key]}</svg></span>`;
 }
 
-// ---- views: Watchlist (home) / Symbol detail (drill-down) / Fund / Optimizer --
+// ---- views: Markets (home) / Watchlist / Symbol detail (drill-down) / Fund / Optimizer --
 
 /** Symbol detail isn't one of the top-nav destinations (it's reached only by
  * clicking a watchlist row, with its own back button), so switching to it
@@ -1327,11 +1327,27 @@ function sparklineSvg(values, width = 150, height = 34) {
     `</svg>`;
 }
 
+// The headline strip is a deliberate pick rather than "the first N rows":
+// the Indian majors lead (this desk follows them), then the global
+// benchmarks you'd want alongside them for context.
+const MARKETS_FEATURED_CODES = [
+  "NIFTY", "SENSEX", "BANKNIFTY", "INDIAVIX",
+  "INDU", "SPX", "CCMP", "UKX", "DAX", "NKY",
+];
+
 function renderMarketsCards() {
   const el = document.getElementById("markets-cards");
   if (!el) return;
-  // The headline strip: one card per major benchmark, in board order.
-  const featured = marketsRows.filter((r) => r.region !== "Commodities & FX").slice(0, 10);
+  const byCode = new Map(marketsRows.map((r) => [r.code, r]));
+  let featured = MARKETS_FEATURED_CODES.map((c) => byCode.get(c)).filter(Boolean);
+  // If the board ever changes shape, fall back to filling the strip rather
+  // than rendering a half-empty row.
+  if (featured.length < 10) {
+    for (const r of marketsRows) {
+      if (featured.length >= 10) break;
+      if (r.region !== "Commodities & FX" && !featured.includes(r)) featured.push(r);
+    }
+  }
   el.innerHTML = featured.map((r) => {
     const cls = marketsDirClass(r.change_pct);
     return `<div class="mkt-card">` +
@@ -1952,5 +1968,8 @@ loadWatchlist().then(startLiveWatchlistLoop);
 loadAlerts();
 loadNarrativeAvailability();
 startLiveChartLoop();
+// Markets is the landing view, so fetch it immediately rather than waiting
+// for the refresh loop's first tick.
+loadMarkets();
 startMarketsLoop();
 setInterval(() => { renderWatchlistStatus(); renderChartSummary(); renderMarketsStatus(); }, 1000); // ticks the "updated Ns ago" text between real polls

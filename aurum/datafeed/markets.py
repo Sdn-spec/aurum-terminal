@@ -51,6 +51,17 @@ class Index:
 
 # Ordered per region; this order is what the board renders in.
 INDICES: List[Index] = [
+    # ---- India ----
+    # First, and its own section rather than folded into APAC: this desk
+    # follows the Indian market specifically, so NIFTY/SENSEX plus the
+    # sector and volatility gauges belong together and above the fold.
+    Index("NIFTY", "NIFTY 50", "^NSEI", "India"),
+    Index("SENSEX", "S&P BSE SENSEX", "^BSESN", "India"),
+    Index("BANKNIFTY", "NIFTY BANK", "^NSEBANK", "India"),
+    Index("NIFTYIT", "NIFTY IT", "^CNXIT", "India"),
+    Index("NIFTYMID", "NIFTY MIDCAP 50", "^NSEMDCP50", "India"),
+    Index("INDIAVIX", "INDIA VIX", "^INDIAVIX", "India"),
+    Index("USDINR", "USD / INR", "USDINR=X", "India"),
     # ---- Americas ----
     Index("INDU", "DOW JONES INDUS. AVG", "^DJI", "Americas"),
     Index("SPX", "S&P 500 INDEX", "^GSPC", "Americas"),
@@ -74,9 +85,8 @@ INDICES: List[Index] = [
     Index("SHSZ300", "CSI 300 INDEX", "000300.SS", "APAC"),
     Index("AS51", "S&P/ASX 200", "^AXJO", "APAC"),
     Index("KOSPI", "KOSPI INDEX", "^KS11", "APAC"),
-    Index("SENSEX", "S&P BSE SENSEX", "^BSESN", "APAC"),
-    Index("NIFTY", "NIFTY 50", "^NSEI", "APAC"),
     Index("TWSE", "TAIWAN TAIEX", "^TWII", "APAC"),
+    Index("STI", "STRAITS TIMES INDEX", "^STI", "APAC"),
     # ---- Commodities & FX (this desk trades gold, so they belong on the board) ----
     Index("GOLD", "GOLD FUTURES", "GC=F", "Commodities & FX"),
     Index("SILVER", "SILVER FUTURES", "SI=F", "Commodities & FX"),
@@ -86,7 +96,7 @@ INDICES: List[Index] = [
     Index("US10Y", "US 10-YEAR YIELD", "^TNX", "Commodities & FX"),
 ]
 
-REGIONS = ["Americas", "EMEA", "APAC", "Commodities & FX"]
+REGIONS = ["India", "Americas", "EMEA", "APAC", "Commodities & FX"]
 BY_TICKER: Dict[str, Index] = {i.ticker: i for i in INDICES}
 
 

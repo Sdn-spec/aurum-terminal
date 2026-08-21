@@ -28,8 +28,8 @@
   </header>
 
   <nav class="topnav" id="topnav">
-    <button data-view="watchlist" class="active">Watchlist</button>
-    <button data-view="markets">Markets</button>
+    <button data-view="markets" class="active">Markets</button>
+    <button data-view="watchlist">Watchlist</button>
     <button data-view="fund">Fund</button>
     <button data-view="optimizer">Optimizer</button>
     <button data-view="journal">Journal</button>
@@ -38,8 +38,8 @@
   <div id="body">
     <main id="main-pane">
 
-      <!-- ===== Watchlist: the home view, live prices, click a row for everything ===== -->
-      <section class="view active" id="view-watchlist">
+      <!-- ===== Watchlist: live prices, click a row for the full symbol picture ===== -->
+      <section class="view" id="view-watchlist">
         <div class="card">
           <div class="card-head">
             <h2>Watchlist</h2>
@@ -167,8 +167,8 @@
         </section>
       </section>
 
-      <!-- ===== Markets: live global index board ===== -->
-      <section class="view" id="view-markets">
+      <!-- ===== Markets: the home view — live global index board, India first ===== -->
+      <section class="view active" id="view-markets">
         <div class="card" id="markets-card">
           <div class="card-head">
             <div>
