@@ -190,6 +190,37 @@ is a paid, per-exchange subscription, while the Markets board covers 35
 instruments across four regions for free. What IBKR uniquely knows is what
 *you* actually did.
 
+### Where the Markets board gets its prices
+
+Yahoo first — one request covers all 35 instruments with real index levels.
+But Yahoo rate-limits per IP, and when it does it refuses *everything* for
+hours, so the board falls through a chain rather than going blank:
+
+1. **Yahoo** batched quote — the whole board, real index levels.
+2. **NSE India** — every Indian index in one keyless request, and the
+   authoritative source rather than a mirror. It also publishes 30-day and
+   1-year moves with the quote, so the board's 1M/1Y columns come free for
+   Indian rows (Yahoo needs a year of daily bars per symbol for those).
+3. **Finnhub** — US and international coverage via liquid ETFs, using the
+   key already configured for news.
+4. **CoinGecko** (crypto) and **Frankfurter** (FX) — both keyless.
+5. The per-symbol Yahoo quote cache, which at least serves the last good
+   value for anything still blank.
+
+Gaps are filled per instrument, so a real Yahoo quote is never replaced by a
+stand-in — the chain only fills what's actually missing.
+
+**On the ETF stand-ins:** an ETF is not the index it tracks. SPY trades near
+765 while the S&P 500 is near 7,650; GLD near 420 while gold is near 4,460.
+Serving those levels under "S&P 500 INDEX" would simply be wrong, so proxy
+rows are labelled with the instrument actually used, both in the value cell
+and under the name, and the board's status line says how many are in play.
+The percentage move is representative; the level is not.
+
+Each source refreshes at a rate it can sustain (Finnhub is one request *per
+symbol* against a 60/min free tier, FX rates change daily) while the board
+itself still ticks every 5s from cache.
+
 Other providers considered and why they lost: **Google Finance** has no
 public API anymore (the old one was deprecated years ago). **Stooq** is
 blocked by an actual JavaScript proof-of-work challenge, not a rate limit —

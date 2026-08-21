@@ -343,32 +343,60 @@ def _refresh_markets_snapshot() -> None:
         if time.time() - _markets_snapshot["at"] < _MARKETS_SNAPSHOT_TTL_SECONDS:
             return  # another request refreshed it while we waited for the lock
         now = time.time()
-        batch_error = None
+        rows: list = []
+        errors = []
+        used_slow_cache = False
+
+        # 1. Yahoo's batched call, when it will have us. One request, real
+        #    index levels, every instrument -- still the best answer.
         if now >= _markets_snapshot["batch_blocked_until"]:
             try:
-                _markets_snapshot["rows"] = markets.fetch_board()
-                _markets_snapshot["at"] = time.time()
-                _markets_snapshot["error"] = None
-                _markets_snapshot["degraded"] = False
-                return
+                rows = markets.fetch_board()
             except yahoo.DataFeedError as e:
-                batch_error = str(e)
+                errors.append(f"Yahoo batch: {e}")
                 _markets_snapshot["batch_blocked_until"] = time.time() + _MARKETS_BATCH_COOLDOWN_SECONDS
-        # The batch endpoint needs a cookie+crumb session Yahoo does not always
-        # hand out. Rather than leaving the board empty, fall back to the
-        # per-symbol quote cache -- slower to freshen (see the TTL above), but
-        # it keeps the dashboard populated instead of blank.
-        try:
-            rows = markets.fetch_board_via_quote_cache(
-                lambda t: cache.get_quote(t, max_age_seconds=_MARKETS_FALLBACK_QUOTE_TTL_SECONDS),
-                deadline_seconds=_MARKETS_FALLBACK_DEADLINE_SECONDS,
-            )
+        else:
+            errors.append("Yahoo batch: on cooldown")
+
+        # 2. Everything that isn't Yahoo, to fill whatever is still missing.
+        #    NSE India covers the Indian indices outright (and is the
+        #    authoritative source for them); Finnhub, CoinGecko and
+        #    Frankfurter cover much of the rest.
+        missing = not rows or any(r.price is None for r in rows)
+        if missing:
+            try:
+                alt = markets.fetch_board_from_alt_sources()
+                rows = markets.merge_boards(rows, alt) if rows else alt
+            except yahoo.DataFeedError as e:
+                errors.append(f"alt sources: {e}")
+
+        # 3. Last resort: the per-symbol Yahoo quote cache, which at least
+        #    serves the last good value for anything still blank.
+        if not rows or all(r.price is None for r in rows):
+            try:
+                cached = markets.fetch_board_via_quote_cache(
+                    lambda t: cache.get_quote(t, max_age_seconds=_MARKETS_FALLBACK_QUOTE_TTL_SECONDS),
+                    deadline_seconds=_MARKETS_FALLBACK_DEADLINE_SECONDS,
+                )
+                rows = markets.merge_boards(rows, cached) if rows else cached
+                used_slow_cache = True
+            except yahoo.DataFeedError as e:
+                errors.append(f"quote cache: {e}")
+
+        if rows and any(r.price is not None for r in rows):
             _markets_snapshot["rows"] = rows
             _markets_snapshot["at"] = time.time()
             _markets_snapshot["error"] = None
-            _markets_snapshot["degraded"] = True
-        except yahoo.DataFeedError as e:
-            _markets_snapshot["error"] = f"{batch_error or 'batch on cooldown'}; fallback also failed: {e}"
+            # "degraded" means the board is not the clean, fully-live article:
+            # something is standing in for an index, a row is still blank, or
+            # it came from the slow per-symbol cache rather than a live feed.
+            _markets_snapshot["degraded"] = (
+                used_slow_cache
+                or any(r.is_proxy for r in rows)
+                or any(r.price is None for r in rows)
+            )
+        else:
+            _markets_snapshot["error"] = "; ".join(errors) or "no source returned any price"
 
 
 def _refresh_markets_stats() -> None:
@@ -393,7 +421,15 @@ def _markets_payload() -> dict:
     out = []
     for row in rows:
         d = dataclasses.asdict(row)
-        d.update(stats.get(row.ticker) or {"change_1m_pct": None, "change_1y_pct": None, "spark": []})
+        # Only fill from the Yahoo history cache where the row doesn't already
+        # carry the figure. NSE publishes 30-day and 1-year moves with the
+        # quote, and blindly merging the (absent) Yahoo stats over the top
+        # threw them away -- the Indian rows showed "—" despite having the data.
+        history = stats.get(row.ticker) or {}
+        for key in ("change_1m_pct", "change_1y_pct"):
+            if d.get(key) is None:
+                d[key] = history.get(key)
+        d["spark"] = history.get("spark") or []
         out.append(d)
     age = time.time() - _markets_snapshot["at"] if _markets_snapshot["at"] else None
     return {

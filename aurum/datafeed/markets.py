@@ -100,6 +100,44 @@ REGIONS = ["India", "Americas", "EMEA", "APAC", "Commodities & FX"]
 BY_TICKER: Dict[str, Index] = {i.ticker: i for i in INDICES}
 
 
+# Where each board code can be sourced when Yahoo is unavailable.
+#   NSE_BY_CODE   -- NSE India's own index names (authoritative, keyless)
+#   PROXY_BY_CODE -- a liquid ETF standing in for an index Finnhub's free tier
+#                    does not carry. An ETF is NOT the index: SPY is roughly
+#                    SPX/10, so rows filled this way are flagged is_proxy and
+#                    the level is labelled as the proxy's, not the index's.
+NSE_BY_CODE = {
+    "NIFTY": "NIFTY 50",
+    "BANKNIFTY": "NIFTY BANK",
+    "NIFTYIT": "NIFTY IT",
+    "NIFTYMID": "NIFTY MIDCAP 50",
+    "INDIAVIX": "INDIA VIX",
+}
+PROXY_BY_CODE = {
+    "SPX": "SPY",
+    "CCMP": "QQQ",
+    "NDX": "QQQ",
+    "INDU": "DIA",
+    "RTY": "IWM",
+    "GOLD": "GLD",
+    "SILVER": "SLV",
+    "WTI": "USO",
+    "UKX": "EWU",
+    "DAX": "EWG",
+    "NKY": "EWJ",
+    "HSI": "EWH",
+    "SENSEX": "INDA",
+    "SPTSX": "EWC",
+    "AS51": "EWA",
+    "KOSPI": "EWY",
+    "TWSE": "EWT",
+    "SX5E": "FEZ",
+}
+CRYPTO_BY_CODE = {"BTC": "bitcoin", "ETH": "ethereum"}
+# USD/x rates from Frankfurter, and how the board wants them expressed
+FX_BY_CODE = {"USDINR": ("INR", False)}
+
+
 @dataclass
 class MarketRow:
     code: str
@@ -119,6 +157,10 @@ class MarketRow:
     change_1m_pct: Optional[float] = None
     change_1y_pct: Optional[float] = None
     spark: List[float] = field(default_factory=list)
+    # which upstream actually answered, and whether the number is a stand-in
+    source: str = ""
+    is_proxy: bool = False
+    proxy_symbol: str = ""
 
 
 class _YahooSession:
@@ -306,6 +348,104 @@ def fetch_board_via_quote_cache(get_quote, deadline_seconds: Optional[float] = N
     return rows
 
 
+def fetch_board_from_alt_sources() -> List[MarketRow]:
+    """Compose the board from everything that isn't Yahoo.
+
+    Each source is attempted independently: NSE being down must not cost you
+    crypto, and a missing Finnhub key must not cost you India. Anything no
+    source can fill comes back priceless, which the board already renders as
+    a dash. Raises only if literally nothing could be filled.
+    """
+    from . import altsources  # imported here to keep the module import cheap
+
+    nse: dict = {}
+    crypto: dict = {}
+    fx: dict = {}
+    proxies: dict = {}
+
+    try:
+        nse = altsources.fetch_nse_indices()
+    except DataFeedError:
+        pass
+    try:
+        crypto = altsources.fetch_crypto(tuple(CRYPTO_BY_CODE.values()))
+    except DataFeedError:
+        pass
+    try:
+        fx = altsources.fetch_fx()
+    except DataFeedError:
+        pass
+    wanted_proxies = sorted({PROXY_BY_CODE[i.code] for i in INDICES if i.code in PROXY_BY_CODE})
+    try:
+        proxies = altsources.fetch_finnhub_quotes(wanted_proxies)
+    except DataFeedError:
+        pass
+
+    rows = []
+    for idx in INDICES:
+        row = MarketRow(code=idx.code, label=idx.label, ticker=idx.ticker, region=idx.region)
+
+        nse_name = NSE_BY_CODE.get(idx.code)
+        crypto_id = CRYPTO_BY_CODE.get(idx.code)
+        fx_pair = FX_BY_CODE.get(idx.code)
+        proxy_symbol = PROXY_BY_CODE.get(idx.code)
+
+        if nse_name and nse_name in nse:
+            data = nse[nse_name]
+            _apply(row, data)
+            row.source = "NSE India"
+        elif crypto_id and crypto_id in crypto:
+            _apply(row, crypto[crypto_id])
+            row.source = "CoinGecko"
+        elif fx_pair and fx.get(fx_pair[0]) is not None:
+            row.price = fx[fx_pair[0]]
+            row.currency = "INR" if fx_pair[0] == "INR" else fx_pair[0]
+            row.source = "Frankfurter"
+        elif proxy_symbol and proxy_symbol in proxies:
+            _apply(row, proxies[proxy_symbol])
+            row.source = "Finnhub"
+            row.is_proxy = True
+            row.proxy_symbol = proxy_symbol
+        rows.append(row)
+
+    if not any(r.price is not None for r in rows):
+        raise DataFeedError("No alternative source could supply any price")
+    return rows
+
+
+def _apply(row: MarketRow, data: dict) -> None:
+    row.price = data.get("price")
+    row.previous_close = data.get("previous_close")
+    row.change = data.get("change")
+    row.change_pct = data.get("change_pct")
+    row.day_high = data.get("day_high")
+    row.day_low = data.get("day_low")
+    row.currency = data.get("currency") or row.currency
+    # NSE publishes these directly; other sources don't, and the history
+    # cache fills them in later.
+    if data.get("change_1m_pct") is not None:
+        row.change_1m_pct = data["change_1m_pct"]
+    if data.get("change_1y_pct") is not None:
+        row.change_1y_pct = data["change_1y_pct"]
+
+
+def merge_boards(primary: List[MarketRow], secondary: List[MarketRow]) -> List[MarketRow]:
+    """Fill gaps in `primary` from `secondary`, per instrument.
+
+    Yahoo answering for some symbols and not others is the normal case while
+    it is throttling, so the board takes the real quote wherever it exists
+    rather than picking one source wholesale.
+    """
+    by_code = {r.code: r for r in secondary}
+    out = []
+    for row in primary:
+        if row.price is None and by_code.get(row.code) and by_code[row.code].price is not None:
+            out.append(by_code[row.code])
+        else:
+            out.append(row)
+    return out
+
+
 def fetch_board() -> List[MarketRow]:
     """One batched upstream call for the whole board. Raises DataFeedError
     if the call fails; callers decide whether to serve a stale snapshot."""
@@ -337,6 +477,7 @@ def fetch_board() -> List[MarketRow]:
                 market_state=q.get("marketState") or "",
                 day_high=q.get("regularMarketDayHigh"),
                 day_low=q.get("regularMarketDayLow"),
+                source="Yahoo" if price is not None else "",
             )
         )
     return rows

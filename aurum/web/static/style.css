@@ -513,6 +513,17 @@ th.c-num { text-align: right; }
 @keyframes mktTickUp { 0% { background: var(--positive-soft); } 100% { background: transparent; } }
 @keyframes mktTickDown { 0% { background: var(--negative-soft); } 100% { background: transparent; } }
 
+.mkt-proxy-note { font-size: 0.6rem; color: var(--accent-strong); margin-top: 2px; letter-spacing: 0.02em; }
+.mkt-proxy-sym {
+  font-size: 0.62rem; color: var(--accent-strong); background: var(--accent-wash);
+  border-radius: 4px; padding: 1px 4px; margin-left: 4px; font-weight: 700;
+}
+.markets-src-badge {
+  display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px;
+  font-family: var(--font-mono); font-size: 0.68rem; background: var(--surface-2);
+  color: var(--text-secondary); border: 1px solid var(--border);
+}
+
 .markets-stale-badge {
   display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px;
   font-family: var(--font-mono); font-size: 0.68rem; background: var(--accent-wash); color: var(--accent-strong);

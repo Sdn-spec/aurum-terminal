@@ -252,6 +252,7 @@ class TestWebServer(unittest.TestCase):
         fallback_rows = [markets.MarketRow(code="SPX", label="S&P 500", ticker="^GSPC",
                                            region="Americas", price=1.0)]
         with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("429")) as batch, \
+             patch.object(markets, "fetch_board_from_alt_sources", side_effect=yahoo.DataFeedError("alt down")), \
              patch.object(markets, "fetch_board_via_quote_cache", return_value=fallback_rows), \
              patch.object(server, "_refresh_markets_stats"):
             self._markets_get()
@@ -267,6 +268,7 @@ class TestWebServer(unittest.TestCase):
         fallback_rows = [markets.MarketRow(code="SPX", label="S&P 500", ticker="^GSPC",
                                            region="Americas", price=1.0)]
         with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("429")), \
+             patch.object(markets, "fetch_board_from_alt_sources", side_effect=yahoo.DataFeedError("alt down")), \
              patch.object(markets, "fetch_board_via_quote_cache", return_value=fallback_rows), \
              patch.object(server, "_refresh_markets_stats"):
             res = self._markets_get()
@@ -311,6 +313,7 @@ class TestWebServer(unittest.TestCase):
         # (the batch endpoint and the per-symbol fallback it degrades to)
         server._markets_snapshot["at"] = 0.0
         with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("rate limited")), \
+             patch.object(markets, "fetch_board_from_alt_sources", side_effect=yahoo.DataFeedError("alt down")), \
              patch.object(markets, "fetch_board_via_quote_cache", side_effect=yahoo.DataFeedError("also rate limited")), \
              patch.object(server, "_refresh_markets_stats"):
             res = self._markets_get()
@@ -322,6 +325,7 @@ class TestWebServer(unittest.TestCase):
     def test_markets_board_returns_502_when_it_has_nothing_at_all(self):
         self._reset_markets_caches()
         with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("rate limited")), \
+             patch.object(markets, "fetch_board_from_alt_sources", side_effect=yahoo.DataFeedError("alt down")), \
              patch.object(markets, "fetch_board_via_quote_cache", side_effect=yahoo.DataFeedError("also rate limited")), \
              patch.object(server, "_refresh_markets_stats"):
             res = self._markets_get()
@@ -332,6 +336,7 @@ class TestWebServer(unittest.TestCase):
         fallback_rows = [markets.MarketRow(code="SPX", label="S&P 500", ticker="^GSPC",
                                            region="Americas", price=4242.0)]
         with patch.object(markets, "fetch_board", side_effect=yahoo.DataFeedError("no crumb")), \
+             patch.object(markets, "fetch_board_from_alt_sources", side_effect=yahoo.DataFeedError("alt down")), \
              patch.object(markets, "fetch_board_via_quote_cache", return_value=fallback_rows) as fb, \
              patch.object(server, "_refresh_markets_stats"):
             res = self._markets_get()
@@ -352,6 +357,22 @@ class TestWebServer(unittest.TestCase):
         self.assertEqual(row["change_1m_pct"], 2.5)
         self.assertEqual(row["change_1y_pct"], 18.0)
         self.assertEqual(row["spark"], [1.0, 2.0])
+
+    def test_a_sources_own_1m_1y_is_not_clobbered_by_the_history_cache(self):
+        """NSE publishes 30-day and 1-year moves alongside the quote. Merging
+        the (absent) Yahoo history stats over the top threw them away, so the
+        Indian rows showed "—" despite having the data."""
+        self._reset_markets_caches()
+        rows = [markets.MarketRow(code="NIFTY", label="NIFTY 50", ticker="^NSEI", region="India",
+                                  price=24252.0, change_1m_pct=0.27, change_1y_pct=-3.32,
+                                  source="NSE India")]
+        server._markets_stats["data"] = {}  # Yahoo history has nothing for this ticker
+        server._markets_stats["at"] = time.time()
+        with patch.object(markets, "fetch_board", return_value=rows):
+            res = self._markets_get()
+        row = res.json()["rows"][0]
+        self.assertEqual(row["change_1m_pct"], 0.27)
+        self.assertEqual(row["change_1y_pct"], -3.32)
 
     def test_ibkr_status_reports_unavailable_without_a_gateway(self):
         """No gateway running is the normal case — a plain 200 saying so, not

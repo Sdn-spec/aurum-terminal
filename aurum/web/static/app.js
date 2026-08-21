@@ -1353,7 +1353,7 @@ function renderMarketsCards() {
     return `<div class="mkt-card">` +
       `<span class="mkt-card-code">${escapeHtml(r.code)}</span>` +
       `<span class="mkt-card-name" title="${escapeHtml(r.label)}">${escapeHtml(r.label)}</span>` +
-      `<span class="mkt-card-value">${fmtIndexValue(r.price)}<span class="mkt-ccy">${escapeHtml(r.currency)}</span></span>` +
+      `<span class="mkt-card-value">${fmtIndexValue(r.price)}<span class="mkt-ccy">${escapeHtml(r.is_proxy ? r.proxy_symbol : r.currency)}</span></span>` +
       `<span class="mkt-card-chg ${cls}">${marketsArrow(r.change_pct)}${fmtMagnitude(r.change_pct, 2, "%")}</span>` +
       // The number above is today's move; the sparkline is the last 30 daily
       // closes, so the two legitimately disagree (an index can be down today
@@ -1462,21 +1462,33 @@ function renderMarketsRegions() {
     const rows = marketsRows.filter((r) => r.region === region);
     const body = rows.map((r) => {
       const dayCls = marketsDirClass(r.change_pct);
+      // A proxy's *level* is not the index's level — GLD trades near 420
+      // while gold is near 4,460. Showing that under "GOLD" unqualified
+      // would be simply wrong, so the value carries the instrument that
+      // actually produced it and the name says what it is.
+      const proxyNote = r.is_proxy
+        ? `<div class="mkt-proxy-note">via ${escapeHtml(r.proxy_symbol)} ETF · % move tracks, level does not</div>`
+        : "";
+      const valueCell = r.is_proxy && r.price !== null && r.price !== undefined
+        ? `${fmtIndexValue(r.price)} <span class="mkt-proxy-sym">${escapeHtml(r.proxy_symbol)}</span>`
+        : fmtIndexValue(r.price);
       return `<tr data-ticker="${escapeHtml(r.ticker)}">` +
         `<td class="mkt-name-cell"><div class="mkt-name-code">${escapeHtml(r.code)}</div>` +
-        `<div class="mkt-name-label">${escapeHtml(r.label)}</div></td>` +
-        `<td class="c-num">${fmtIndexValue(r.price)}</td>` +
+        `<div class="mkt-name-label">${escapeHtml(r.label)}</div>${proxyNote}</td>` +
+        `<td class="c-num">${valueCell}</td>` +
         `<td class="c-num ${dayCls}">${marketsArrow(r.change)}${fmtMagnitude(r.change)}</td>` +
         `<td class="c-num ${dayCls}">${marketsArrow(r.change_pct)}${fmtMagnitude(r.change_pct, 2, "%")}</td>` +
         `<td class="c-num ${marketsDirClass(r.change_1m_pct)}">${marketsArrow(r.change_1m_pct)}${fmtMagnitude(r.change_1m_pct, 2, "%")}</td>` +
         `<td class="c-num ${marketsDirClass(r.change_1y_pct)}">${marketsArrow(r.change_1y_pct)}${fmtMagnitude(r.change_1y_pct, 2, "%")}</td>` +
+        `<td class="mkt-time">${escapeHtml(r.source || "—")}</td>` +
         `<td class="mkt-time">${fmtMarketTime(r.market_time)}</td>` +
         `</tr>`;
     }).join("");
     return `<div class="card"><div class="card-head"><h3 class="mkt-region-title">${escapeHtml(region)}</h3></div>` +
       `<div class="table-scroll"><table class="mkt-table"><thead><tr>` +
       `<th>Name</th><th class="c-num">Value</th><th class="c-num">Change</th><th class="c-num">% Change</th>` +
-      `<th class="c-num">1 Month</th><th class="c-num">1 Year</th><th class="mkt-time">Time</th>` +
+      `<th class="c-num">1 Month</th><th class="c-num">1 Year</th>` +
+      `<th class="mkt-time">Source</th><th class="mkt-time">Time</th>` +
       `</tr></thead><tbody>${body}</tbody></table></div></div>`;
   }).join("");
 }
@@ -1516,9 +1528,12 @@ function renderMarketsStatus() {
   const label = paused
     ? "Auto-refresh off"
     : `Live · ${marketsRows.length} instruments · updated ${age === null ? "—" : age + "s"} ago`;
+  const sources = [...new Set(marketsRows.filter((r) => r.source).map((r) => r.source))];
+  const proxies = marketsRows.filter((r) => r.is_proxy).length;
   const badges =
     (marketsStale ? `<span class="markets-stale-badge">stale — last refresh failed</span>` : "") +
-    (marketsDegraded ? `<span class="markets-stale-badge">slow mode — batch feed unavailable, prices refresh every few minutes</span>` : "");
+    (sources.length ? `<span class="markets-src-badge">${escapeHtml(sources.join(" · "))}</span>` : "") +
+    (proxies ? `<span class="markets-stale-badge">${proxies} via ETF proxy — % move tracks, level doesn't</span>` : "");
   el.innerHTML = `${dot}${escapeHtml(label)} ${badges}`;
 }
 
