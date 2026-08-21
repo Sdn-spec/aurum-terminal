@@ -23,10 +23,12 @@ DXY-to-UUP proxy substitution.
 """
 
 import json
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 from .yahoo import DataFeedError, HistoryBar, Quote
@@ -35,8 +37,82 @@ BASE_URL = "https://api.twelvedata.com"
 
 _INTERVAL_MAP = {"1d": "1day", "1wk": "1week", "1mo": "1month", "1h": "1h", "15m": "15min", "5m": "5min", "1m": "1min"}
 
+# ---- daily-quota guard ------------------------------------------------------
+# Twelve Data's free tier is 800 credits a day, and this client is reached as
+# a *fallback* -- every Yahoo failure sends a call here. So a Yahoo outage
+# doesn't degrade to Twelve Data, it stampedes it: found this key at 11,001
+# credits used against a limit of 800, i.e. ~13x the daily allowance burned
+# entirely on calls that could only ever return "out of credits".
+#
+# Once the API says the day's quota is gone, believe it and stop calling until
+# the quota actually resets (UTC midnight, per Twelve Data's docs).
+_quota_lock = threading.Lock()
+_quota = {"exhausted_until": 0.0}
+
+# Symbols this plan is not entitled to (SPX, NASDAQ, SILVER, OIL on the free
+# tier -- see the module docstring). A refusal still costs a credit, so asking
+# again every poll spends the day's allowance on answers that cannot change
+# until the plan does. Remember them and stop asking.
+_unsupported: set = set()
+
+
+class QuotaExhaustedError(DataFeedError):
+    """Raised while Twelve Data's daily credit allowance is known to be spent."""
+
+
+class SymbolNotOnPlanError(DataFeedError):
+    """Raised for a symbol this API plan does not include. Distinct from a
+    transient failure: retrying cannot help until the plan is upgraded."""
+
+
+def _looks_like_plan_restriction(message: str) -> bool:
+    lowered = message.lower()
+    return "plan" in lowered and ("available" in lowered or "upgrade" in lowered)
+
+
+def _seconds_until_utc_midnight() -> float:
+    now = datetime.now(timezone.utc)
+    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (tomorrow - now).total_seconds()
+
+
+def quota_status() -> dict:
+    with _quota_lock:
+        remaining = max(0.0, _quota["exhausted_until"] - time.time())
+    return {"exhausted": remaining > 0, "seconds_until_reset": remaining}
+
+
+def reset_quota_guard() -> None:
+    with _quota_lock:
+        _quota["exhausted_until"] = 0.0
+
+
+def _note_quota_exhausted() -> None:
+    with _quota_lock:
+        _quota["exhausted_until"] = time.time() + _seconds_until_utc_midnight()
+
+
+def _check_quota() -> None:
+    with _quota_lock:
+        remaining = _quota["exhausted_until"] - time.time()
+    if remaining > 0:
+        raise QuotaExhaustedError(
+            f"Twelve Data's daily credit limit is spent; not calling again for "
+            f"{remaining / 3600:.1f}h (resets at UTC midnight)"
+        )
+
+
+def reset_plan_memo() -> None:
+    _unsupported.clear()
+
 
 def _get(path: str, params: dict) -> dict:
+    _check_quota()
+    symbol = params.get("symbol")
+    if symbol in _unsupported:
+        raise SymbolNotOnPlanError(
+            f"Twelve Data's current plan does not include {symbol}; not spending a credit to be told again"
+        )
     query = urllib.parse.urlencode(params)
     url = f"{BASE_URL}/{path}?{query}"
     request = urllib.request.Request(url, headers={"User-Agent": "aurum-terminal/1.0"})
@@ -44,6 +120,12 @@ def _get(path: str, params: dict) -> dict:
         with urllib.request.urlopen(request, timeout=10) as response:
             payload = json.loads(response.read())
     except urllib.error.HTTPError as e:
+        if e.code == 429:
+            # 429 here is the daily credit allowance, not a per-second burst.
+            _note_quota_exhausted()
+            raise QuotaExhaustedError(
+                f"Twelve Data daily credit limit reached; pausing calls until the quota resets"
+            ) from e
         raise DataFeedError(f"Twelve Data returned HTTP {e.code} for {params.get('symbol')}") from e
     except (urllib.error.URLError, TimeoutError) as e:
         # a mid-read timeout comes back as a bare TimeoutError, not wrapped in
@@ -54,7 +136,17 @@ def _get(path: str, params: dict) -> dict:
         raise DataFeedError(f"Twelve Data returned unparseable data for {params.get('symbol')}") from e
 
     if isinstance(payload, dict) and payload.get("status") == "error":
-        raise DataFeedError(f"Twelve Data error for {params.get('symbol')}: {payload.get('message')}")
+        message = str(payload.get("message") or "")
+        # The same exhaustion can arrive as a 200 with an error body rather
+        # than an HTTP 429, so catch it here too.
+        if payload.get("code") == 429 or "run out of API credits" in message:
+            _note_quota_exhausted()
+            raise QuotaExhaustedError(f"Twelve Data daily credit limit reached: {message}")
+        if _looks_like_plan_restriction(message):
+            if symbol:
+                _unsupported.add(symbol)
+            raise SymbolNotOnPlanError(f"Twelve Data plan does not include {symbol}: {message}")
+        raise DataFeedError(f"Twelve Data error for {params.get('symbol')}: {message}")
     return payload
 
 
