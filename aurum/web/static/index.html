@@ -235,6 +235,27 @@
 
       <!-- ===== Journal: paper-trading log, its own equity curve and setup breakdown ===== -->
       <section class="view" id="view-journal">
+        <div class="card" id="ibkr-card" hidden>
+          <div class="card-head">
+            <div>
+              <h2>Interactive Brokers</h2>
+              <p class="status-line" id="ibkr-status" style="margin:2px 0 0">Checking for IB Gateway…</p>
+            </div>
+            <div class="card-head-controls">
+              <button id="ibkr-refresh" type="button">Refresh</button>
+              <button id="ibkr-import" type="button">Import today's fills</button>
+            </div>
+          </div>
+          <p class="status-line">Reads your account read-only — positions, balance, and today's executions. Importing adds only fills that actually closed a position, and skips anything already in the ledger.</p>
+          <div id="ibkr-output" class="panel-body"></div>
+          <div class="table-scroll">
+            <table id="ibkr-positions-table" hidden>
+              <thead><tr><th>Symbol</th><th>Type</th><th>Currency</th><th class="c-num">Position</th><th class="c-num">Avg cost</th></tr></thead>
+              <tbody id="ibkr-positions-body"></tbody>
+            </table>
+          </div>
+        </div>
+
         <section class="stats-strip" id="journal-stats"></section>
 
         <div class="card">

@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastapi.testclient import TestClient
 
 from aurum.alerts import store as alerts_store
+from aurum.broker import ibkr
 from aurum.datafeed import cache, finnhub, fred, markets, provider, watchlist_store, yahoo
 from aurum.journal import store as journal_store
 from aurum.web import server
@@ -351,6 +352,71 @@ class TestWebServer(unittest.TestCase):
         self.assertEqual(row["change_1m_pct"], 2.5)
         self.assertEqual(row["change_1y_pct"], 18.0)
         self.assertEqual(row["spark"], [1.0, 2.0])
+
+    def test_ibkr_status_reports_unavailable_without_a_gateway(self):
+        """No gateway running is the normal case — a plain 200 saying so, not
+        an error the frontend has to special-case."""
+        with patch.object(ibkr, "_run_with_ib", side_effect=ibkr.BrokerError("connection refused")):
+            res = self.client.get("/api/ibkr/status")
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(res.json()["available"])
+
+    def test_ibkr_positions_returns_502_when_the_gateway_is_gone(self):
+        with patch.object(ibkr, "get_positions", side_effect=ibkr.BrokerError("no gateway")):
+            res = self.client.get("/api/ibkr/positions")
+        self.assertEqual(res.status_code, 502)
+
+    def test_ibkr_fills_splits_importable_from_raw(self):
+        fills = [
+            {"exec_id": "a1", "time": "2026-08-21T10:00:00+00:00", "symbol": "GC", "side": "SLD",
+             "shares": 1.0, "price": 4400.0, "commission": 2.0, "realized_pnl": 100.0},
+            {"exec_id": "b2", "time": "2026-08-21T10:05:00+00:00", "symbol": "GC", "side": "BOT",
+             "shares": 1.0, "price": 4390.0, "commission": 2.0, "realized_pnl": None},
+        ]
+        with patch.object(ibkr, "get_fills", return_value=fills):
+            res = self.client.get("/api/ibkr/fills")
+        body = res.json()
+        self.assertEqual(len(body["fills"]), 2)
+        self.assertEqual(len(body["importable"]), 1)  # the opening fill is not importable
+
+    def test_ibkr_import_adds_realised_fills_to_the_journal(self):
+        fills = [{"exec_id": "a1", "time": "2026-08-21T10:00:00+00:00", "symbol": "GC", "side": "SLD",
+                  "shares": 1.0, "price": 4400.0, "commission": 2.0, "realized_pnl": 100.0}]
+        with patch.object(ibkr, "get_fills", return_value=fills):
+            res = self.client.post("/api/ibkr/import-fills")
+        body = res.json()
+        self.assertEqual(body["added"], 1)
+        self.assertEqual(len(body["journal"]["trades"]), 1)
+        self.assertAlmostEqual(body["journal"]["trades"][0]["pnl"], 98.0)  # net of commission
+
+    def test_ibkr_import_is_idempotent(self):
+        """Re-importing after a couple more trades should add only the new
+        ones, not duplicate the morning's."""
+        fills = [{"exec_id": "a1", "time": "2026-08-21T10:00:00+00:00", "symbol": "GC", "side": "SLD",
+                  "shares": 1.0, "price": 4400.0, "commission": 2.0, "realized_pnl": 100.0}]
+        with patch.object(ibkr, "get_fills", return_value=fills):
+            self.client.post("/api/ibkr/import-fills")
+            second = self.client.post("/api/ibkr/import-fills").json()
+        self.assertEqual(second["added"], 0)
+        self.assertEqual(second["skipped"], 1)
+        self.assertEqual(len(second["journal"]["trades"]), 1)
+
+    def test_ibkr_import_adds_only_the_new_fill_on_a_second_run(self):
+        first = [{"exec_id": "a1", "time": "2026-08-21T10:00:00+00:00", "symbol": "GC", "side": "SLD",
+                  "shares": 1.0, "price": 4400.0, "commission": 2.0, "realized_pnl": 100.0}]
+        later = first + [{"exec_id": "b2", "time": "2026-08-21T14:00:00+00:00", "symbol": "SI", "side": "BOT",
+                          "shares": 3.0, "price": 58.0, "commission": 1.0, "realized_pnl": -20.0}]
+        with patch.object(ibkr, "get_fills", return_value=first):
+            self.client.post("/api/ibkr/import-fills")
+        with patch.object(ibkr, "get_fills", return_value=later):
+            res = self.client.post("/api/ibkr/import-fills").json()
+        self.assertEqual(res["added"], 1)
+        self.assertEqual(len(res["journal"]["trades"]), 2)
+
+    def test_ibkr_import_returns_502_when_the_gateway_is_gone(self):
+        with patch.object(ibkr, "get_fills", side_effect=ibkr.BrokerError("no gateway")):
+            res = self.client.post("/api/ibkr/import-fills")
+        self.assertEqual(res.status_code, 502)
 
     def test_journal_empty_by_default(self):
         res = self.client.get("/api/journal")

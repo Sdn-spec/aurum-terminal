@@ -93,7 +93,7 @@ function switchView(viewName) {
     requestAnimationFrame(() => { resizePriceChart(); resizeBacktestChart(); });
   }
   if (viewName === "optimizer") loadCorrelation();
-  if (viewName === "journal") loadJournal();
+  if (viewName === "journal") { loadJournal(); loadIbkrStatus(); }
   if (viewName === "markets") loadMarkets();
 }
 document.getElementById("topnav").addEventListener("click", (e) => {
@@ -1565,6 +1565,99 @@ document.getElementById("markets-interval").addEventListener("click", (e) => {
   document.querySelectorAll("#markets-interval button").forEach((b) => b.classList.toggle("active", b === btn));
   renderMarketsStatus();
   if (marketsRefreshMs) loadMarkets();
+});
+
+// ---- Interactive Brokers (optional; only appears when IB Gateway answers) ---
+// Lives inside the Journal view because the thing it is actually for is
+// getting real fills into the ledger without retyping them.
+
+let ibkrAvailable = false;
+
+function renderIbkrPositions(positions) {
+  const table = document.getElementById("ibkr-positions-table");
+  const body = document.getElementById("ibkr-positions-body");
+  if (!table || !body) return;
+  const open = (positions || []).filter((p) => p.position);
+  if (!open.length) {
+    table.hidden = true;
+    return;
+  }
+  body.innerHTML = open.map((p) =>
+    `<tr><td>${escapeHtml(p.symbol || "—")}</td>` +
+    `<td>${escapeHtml(p.sec_type || "—")}</td>` +
+    `<td>${escapeHtml(p.currency || "—")}</td>` +
+    `<td class="c-num ${p.position > 0 ? "mkt-up" : "mkt-down"}">${fmtPlain(p.position)}</td>` +
+    `<td class="c-num">${fmtPlain(p.avg_cost)}</td></tr>`
+  ).join("");
+  table.hidden = false;
+}
+
+async function loadIbkrStatus() {
+  const card = document.getElementById("ibkr-card");
+  const statusEl = document.getElementById("ibkr-status");
+  if (!card) return;
+  let status;
+  try {
+    status = await getJSON("/api/ibkr/status");
+  } catch (e) {
+    card.hidden = true;
+    return;
+  }
+  ibkrAvailable = !!status.available;
+  if (!ibkrAvailable) {
+    // No gateway running is the normal case, not an error — keep the whole
+    // card out of the way rather than showing a permanent failure notice.
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const accounts = (status.accounts || []).join(", ") || "no accounts reported";
+  statusEl.innerHTML = `<span class="live-dot"></span>Connected to ${escapeHtml(status.host)}:${status.port} · ${escapeHtml(accounts)}`;
+  statusEl.classList.remove("error");
+  loadIbkrDetail();
+}
+
+async function loadIbkrDetail() {
+  const out = document.getElementById("ibkr-output");
+  if (!out || !ibkrAvailable) return;
+  out.innerHTML = loadingHtml("Reading account…");
+  try {
+    const [positions, fills] = await Promise.all([
+      getJSON("/api/ibkr/positions"),
+      getJSON("/api/ibkr/fills"),
+    ]);
+    renderIbkrPositions(positions);
+    const importable = (fills.importable || []).length;
+    const total = (fills.fills || []).length;
+    out.textContent =
+      `${positions.filter((p) => p.position).length} open position(s).\n` +
+      `${total} execution(s) today, ${importable} of which closed a position and can be imported.` +
+      (total && !importable ? "\n\nOpening fills aren't imported — they have no outcome yet." : "");
+  } catch (err) {
+    out.innerHTML = `<span class="neg">${escapeHtml(err.message)}</span>`;
+  }
+}
+
+document.getElementById("ibkr-refresh").addEventListener("click", () => loadIbkrStatus());
+
+document.getElementById("ibkr-import").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("ibkr-output");
+  btn.disabled = true;
+  out.innerHTML = loadingHtml("Importing fills…");
+  try {
+    const r = await getJSON("/api/ibkr/import-fills", { method: "POST" });
+    journalState = r.journal;
+    renderJournal();
+    out.textContent =
+      `Imported ${r.added} trade(s).` +
+      (r.skipped ? ` Skipped ${r.skipped} already in the ledger.` : "") +
+      (!r.realised_fills_seen ? "\n\nNo closed trades today — nothing to import yet." : "");
+  } catch (err) {
+    out.innerHTML = `<span class="neg">${escapeHtml(err.message)}</span>`;
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 // ---- journal (paper-trading log, merged in from the standalone Bullion Ledger

@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..alerts import store as alerts_store
 from ..backtest.adapter import run_strategy
+from ..broker import ibkr
 from ..datafeed import cache, finnhub, fred, markets, universe, watchlist_store, yahoo
 from ..decision import memo as decision_memo
 from ..forecast import baseline
@@ -450,6 +451,79 @@ async def get_markets():
         # seconds, so it will pick it up on the next tick.
         return JSONResponse(status_code=202, content={**payload, "warming_up": True})
     return payload
+
+
+# ---- Interactive Brokers (optional; needs IB Gateway running locally) ------
+# Every call runs on a worker thread with a short timeout: IB Gateway is a
+# local process that can be closed, wedged, or logged out at any moment, and
+# none of that should be able to hang a page.
+
+
+@app.get("/api/ibkr/status")
+async def get_ibkr_status():
+    return await asyncio.to_thread(ibkr.get_status)
+
+
+@app.get("/api/ibkr/positions")
+async def get_ibkr_positions():
+    try:
+        return await asyncio.to_thread(ibkr.get_positions)
+    except ibkr.BrokerError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/ibkr/account")
+async def get_ibkr_account():
+    try:
+        return await asyncio.to_thread(ibkr.get_account_summary)
+    except ibkr.BrokerError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/ibkr/fills")
+async def get_ibkr_fills():
+    try:
+        fills = await asyncio.to_thread(ibkr.get_fills)
+    except ibkr.BrokerError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"fills": fills, "importable": ibkr.fills_to_journal_trades(fills)}
+
+
+@app.post("/api/ibkr/import-fills")
+async def post_ibkr_import_fills():
+    """Copy today's realised IBKR fills into the trade journal.
+
+    Skips anything already imported: re-importing after a couple more trades
+    should add only the new ones, not duplicate the morning's. The execution
+    id is IBKR's own unique key and is recorded in each entry's notes, which
+    is what makes that check possible."""
+    try:
+        fills = await asyncio.to_thread(ibkr.get_fills)
+    except ibkr.BrokerError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    candidates = ibkr.fills_to_journal_trades(fills)
+    existing_notes = " ".join(
+        t.notes for t in (await asyncio.to_thread(journal_store.load_journal))["trades"]
+    )
+    added = 0
+    for trade in candidates:
+        exec_id = (trade.get("notes") or "").split("exec ")[-1].split(")")[0]
+        if exec_id and exec_id in existing_notes:
+            continue
+        try:
+            await asyncio.to_thread(journal_store.add_trade, **trade)
+            added += 1
+        except (ValueError, TypeError):
+            continue  # one malformed fill shouldn't abort the whole import
+
+    journal = await asyncio.to_thread(journal_store.load_journal)
+    return {
+        "added": added,
+        "skipped": len(candidates) - added,
+        "realised_fills_seen": len(candidates),
+        "journal": _journal_dict(journal),
+    }
 
 
 @app.get("/api/quote/{name}")

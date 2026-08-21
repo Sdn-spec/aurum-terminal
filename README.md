@@ -156,6 +156,40 @@ render). Same `data/config.json` file, same env-var-first resolution order:
   appears once a key is configured; nothing here overrides or second-
   guesses the rule-based verdict.
 
+### Interactive Brokers (optional)
+
+The **Journal** tab can read your real IBKR account — positions, balances,
+and today's executions — and import closed trades into the ledger instead of
+you retyping them. It's the one integration with no API key: IBKR's model is
+that you run their software locally and connect to it over a socket, so
+"configured" means "a gateway is reachable", not "a secret is present".
+
+1. Install the client library: `pip install ib_async` (already in
+   `requirements.txt`).
+2. Run **IB Gateway** (lighter than full TWS and meant for exactly this).
+3. Gateway → Global Configuration → API → Settings → enable **"ActiveX and
+   Socket Clients"**, trust `127.0.0.1`, and leave read-only on — this app
+   never places orders and connects read-only regardless.
+4. Note the port. They differ by live vs paper, which is the usual trap:
+   TWS live `7496` / paper `7497`, Gateway live `4001` / paper `4002`.
+
+Defaults are `127.0.0.1:4002` — Gateway *paper* — because defaulting to a
+live account isn't something this should do quietly. Override with
+`IBKR_HOST` / `IBKR_PORT` / `IBKR_CLIENT_ID`, or `ibkr_host`, `ibkr_port`,
+`ibkr_client_id` in `data/config.json`.
+
+The card stays hidden unless a gateway actually answers, so nothing breaks
+when it isn't running. Only fills that *realised* a P&L get imported — an
+opening fill has no outcome yet, and importing those would pad the ledger
+with zero-P&L rows that drag the win rate toward meaningless. Imports are
+idempotent: each entry records IBKR's execution id, so re-importing later
+in the day adds only the new trades.
+
+Deliberately **not** wired up as a market-data source: IBKR real-time data
+is a paid, per-exchange subscription, while the Markets board covers 35
+instruments across four regions for free. What IBKR uniquely knows is what
+*you* actually did.
+
 Other providers considered and why they lost: **Google Finance** has no
 public API anymore (the old one was deprecated years ago). **Stooq** is
 blocked by an actual JavaScript proof-of-work challenge, not a rate limit —
