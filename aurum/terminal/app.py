@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Header, Sparkline, Static
 
 from ..datafeed import cache, universe, yahoo
@@ -105,7 +106,16 @@ class Aurum(App):
         self.run_worker(self._refresh_quotes(), exclusive=True, group="quotes")
 
     def set_status(self, message: str) -> None:
-        self.query_one("#status-bar", Static).update(message)
+        # The quote refresh is a multi-second worker that reports progress as
+        # it goes, so it routinely outlives the screen that owns the status
+        # bar -- quit the app (or swap the screen) mid-refresh and the next
+        # progress update finds nothing to write to. query_one raises NoMatches
+        # there, which kills the worker with an exception instead of letting it
+        # wind down. A missing status bar just means nobody is listening.
+        try:
+            self.query_one("#status-bar", Static).update(message)
+        except NoMatches:
+            pass
 
     # ---- data fetching (workers) --------------------------------------
 
