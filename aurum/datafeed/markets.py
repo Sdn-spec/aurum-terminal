@@ -33,7 +33,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from .yahoo import USER_AGENT, DataFeedError
+from . import yahoo
+from .yahoo import USER_AGENT, DataFeedError, RateLimitedError
 
 QUOTE_URL = "https://query1.finance.yahoo.com/v7/finance/quote"
 CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
@@ -152,6 +153,10 @@ class _YahooSession:
         self._opener, self._crumb, self._established_at = opener, crumb, time.time()
 
     def fetch_quotes(self, tickers: List[str]) -> List[dict]:
+        # Shares the global Yahoo breaker with the chart client: the throttle
+        # is per-IP across every Yahoo endpoint, so the batch path must respect
+        # the same cooldown rather than knocking on its own.
+        yahoo._check_breaker()
         with self._lock:
             if self._opener is None or self._crumb is None or time.time() - self._established_at > 1800:
                 self._handshake()
@@ -166,6 +171,12 @@ class _YahooSession:
             with opener.open(url, timeout=15) as r:
                 payload = json.loads(r.read())
         except urllib.error.HTTPError as e:
+            if e.code == 429:
+                yahoo._note_rate_limited()
+                if yahoo.rate_limit_status()["open"]:
+                    raise RateLimitedError(
+                        "Yahoo rate-limited the batch quote; pausing Yahoo requests so the limit can clear"
+                    ) from e
             if e.code in (401, 403, 429):
                 with self._lock:
                     self._handshake()
@@ -186,6 +197,7 @@ class _YahooSession:
         except json.JSONDecodeError as e:
             raise DataFeedError("Yahoo returned unparseable data for the batch quote") from e
 
+        yahoo._note_request_succeeded()  # a good response clears the breaker's 429 streak
         return payload.get("quoteResponse", {}).get("result") or []
 
 

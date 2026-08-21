@@ -68,6 +68,16 @@ class _FakeResponse:
 
 
 class TestYahooClient(unittest.TestCase):
+    def setUp(self):
+        # The rate-limit breaker is process-global by design (the throttle it
+        # guards against is per-IP, not per-call). Tests here deliberately
+        # drive 429s through _fetch, which trips it -- reset around each one
+        # so an open breaker can't leak into the next test.
+        yahoo.reset_rate_limit()
+
+    def tearDown(self):
+        yahoo.reset_rate_limit()
+
     def test_get_history_parses_bars_and_skips_nulls(self):
         with patch("urllib.request.urlopen", return_value=_FakeResponse(SAMPLE_CHART_RESPONSE)):
             bars = yahoo.get_history("GC=F", range_="5d", interval="1d")
@@ -123,13 +133,18 @@ class TestYahooClient(unittest.TestCase):
             with self.assertRaises(yahoo.DataFeedError):
                 yahoo.get_history("GC=F")
 
-    def test_429_exhausts_retries_and_raises_datafeed_error(self):
+    def test_persistent_429_raises_datafeed_error_and_stops_retrying(self):
+        """A sustained 429 surfaces as a DataFeedError. Note it now stops at
+        the rate-limit breaker rather than running the full retry budget --
+        continuing to retry into an active throttle is what keeps it alive."""
         def always_429(*args, **kwargs):
             raise urllib.error.HTTPError("url", 429, "Too Many Requests", {}, io.BytesIO())
 
-        with patch("urllib.request.urlopen", side_effect=always_429), patch("time.sleep"):
+        with patch("urllib.request.urlopen", side_effect=always_429) as urlopen, patch("time.sleep"):
             with self.assertRaises(yahoo.DataFeedError):
                 yahoo.get_history("GC=F")
+            self.assertEqual(urlopen.call_count, yahoo._RATE_LIMIT_TRIP_AFTER)
+            self.assertTrue(yahoo.rate_limit_status()["open"])
 
     def test_unknown_symbol_raises_datafeed_error(self):
         empty = {"chart": {"result": None, "error": {"description": "No data found"}}}

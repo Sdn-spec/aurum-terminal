@@ -16,6 +16,7 @@ Two things to know about what you get back:
 """
 
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -25,9 +26,72 @@ from typing import List, Optional
 BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
+# ---- rate-limit circuit breaker --------------------------------------------
+# Once Yahoo starts refusing an IP it refuses everything -- chart, quote, crumb
+# -- and the per-call retry loop below then turns each caller into four
+# requests instead of one. With a watchlist polling on a timer that is enough
+# to keep feeding the throttle that caused it: the ban stops decaying because
+# the app never stops knocking. Observed live while building the markets
+# board: an IP stayed 429 on every endpoint for over an hour.
+#
+# So consecutive 429s trip a breaker. While it is open every call fails fast
+# and locally, without touching the network, which lets the limit expire.
+_RATE_LIMIT_TRIP_AFTER = 3  # consecutive 429s before the breaker opens
+_RATE_LIMIT_COOLDOWN_SECONDS = 180.0
+_rate_limit_lock = threading.Lock()
+_rate_limit = {"consecutive_429s": 0, "blocked_until": 0.0}
+
 
 class DataFeedError(RuntimeError):
     """Raised when Yahoo can't be reached or returns something unusable."""
+
+
+class RateLimitedError(DataFeedError):
+    """Raised while the circuit breaker is open. A DataFeedError subclass so
+    every existing `except DataFeedError` path keeps working unchanged."""
+
+
+def rate_limit_status() -> dict:
+    """How long the breaker has left, for callers that want to explain the
+    situation rather than just report a failure."""
+    with _rate_limit_lock:
+        remaining = max(0.0, _rate_limit["blocked_until"] - time.time())
+        return {
+            "open": remaining > 0,
+            "seconds_remaining": remaining,
+            "consecutive_429s": _rate_limit["consecutive_429s"],
+        }
+
+
+def reset_rate_limit() -> None:
+    """Clear the breaker. Used by tests, and available if you know the limit
+    has lifted and don't want to wait out the cooldown."""
+    with _rate_limit_lock:
+        _rate_limit["consecutive_429s"] = 0
+        _rate_limit["blocked_until"] = 0.0
+
+
+def _note_rate_limited() -> None:
+    with _rate_limit_lock:
+        _rate_limit["consecutive_429s"] += 1
+        if _rate_limit["consecutive_429s"] >= _RATE_LIMIT_TRIP_AFTER:
+            _rate_limit["blocked_until"] = time.time() + _RATE_LIMIT_COOLDOWN_SECONDS
+
+
+def _note_request_succeeded() -> None:
+    with _rate_limit_lock:
+        _rate_limit["consecutive_429s"] = 0
+        _rate_limit["blocked_until"] = 0.0
+
+
+def _check_breaker() -> None:
+    with _rate_limit_lock:
+        remaining = _rate_limit["blocked_until"] - time.time()
+    if remaining > 0:
+        raise RateLimitedError(
+            f"Yahoo is rate-limiting this machine; pausing requests for another {remaining:.0f}s "
+            f"so the limit can clear"
+        )
 
 
 @dataclass(frozen=True)
@@ -57,6 +121,10 @@ class Quote:
 
 
 def _fetch(symbol: str, params: dict, retries: int = 4) -> dict:
+    # Fail fast and offline while the breaker is open, so a throttled IP gets
+    # the quiet it needs instead of a steady stream of doomed requests.
+    _check_breaker()
+
     query = "&".join(f"{k}={v}" for k, v in params.items())
     url = f"{BASE_URL.format(symbol=symbol)}?{query}"
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -66,17 +134,27 @@ def _fetch(symbol: str, params: dict, retries: int = 4) -> dict:
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 payload = json.loads(response.read())
+            _note_request_succeeded()
             break
         except urllib.error.HTTPError as e:
             last_error = e
-            if e.code == 429 and attempt < retries - 1:
-                # Yahoo's edge rate-limits per IP; back off and try again rather
-                # than failing outright — quote data is delayed anyway, so
-                # waiting a couple seconds costs nothing real.
-                retry_after = e.headers.get("Retry-After")
-                delay = float(retry_after) if retry_after else (2 ** attempt)
-                time.sleep(min(delay, 20))
-                continue
+            if e.code == 429:
+                _note_rate_limited()
+                # If that tripped the breaker, stop immediately -- retrying
+                # into an active throttle is what keeps it alive.
+                if rate_limit_status()["open"]:
+                    raise RateLimitedError(
+                        f"Yahoo rate-limited {symbol}; pausing all Yahoo requests for "
+                        f"{_RATE_LIMIT_COOLDOWN_SECONDS:.0f}s so the limit can clear"
+                    ) from e
+                if attempt < retries - 1:
+                    # Yahoo's edge rate-limits per IP; back off and try again rather
+                    # than failing outright — quote data is delayed anyway, so
+                    # waiting a couple seconds costs nothing real.
+                    retry_after = e.headers.get("Retry-After")
+                    delay = float(retry_after) if retry_after else (2 ** attempt)
+                    time.sleep(min(delay, 20))
+                    continue
             raise DataFeedError(f"Yahoo returned HTTP {e.code} for {symbol}") from e
         except (urllib.error.URLError, TimeoutError) as e:
             # A timeout that happens mid-response-read (not at connect time)
